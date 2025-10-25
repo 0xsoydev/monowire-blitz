@@ -1,2 +1,7 @@
 @openzeppelin/contracts/=lib/openzeppelin-contracts/contracts
+@chainlink/contracts-ccip/=node_modules/@chainlink/contracts-ccip/
+@layerzerolabs/oft-evm/=node_modules/@layerzerolabs/oft-evm/
+@layerzerolabs/oapp-evm/=node_modules/@layerzerolabs/oapp-evm/
+@layerzerolabs/lz-v2-utilities/=node_modules/@layerzerolabs/lz-v2-utilities/
+@layerzerolabs/lz-definitions/=node_modules/@layerzerolabs/lz-definitions/
   

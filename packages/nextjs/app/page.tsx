@@ -22,6 +22,9 @@ const Home: NextPage = () => {
               <Link href="/create" className="btn btn-primary btn-lg">
                 Create Invoice
               </Link>
+              <Link href="/cross-chain" className="btn btn-accent btn-lg">
+                🌉 Cross-Chain Payment
+              </Link>
               {address && (
                 <Link href="/dashboard" className="btn btn-secondary btn-lg">
                   Dashboard
@@ -60,8 +63,8 @@ const Home: NextPage = () => {
                 <li>✅ Automatic payment splits to multiple recipients</li>
                 <li>✅ QR code payment links</li>
                 <li>✅ Real-time dashboard</li>
-                <li>🔄 Pay with any token (Kuru DEX integration)</li>
-                <li>🌐 Cross-chain payments (Chainlink CCIP)</li>
+                <li>✅ Pay with any token (Kuru DEX integration)</li>
+                <li>✅ Cross-chain payments (Real bridge integration)</li>
               </ul>
             </div>
           </div>
