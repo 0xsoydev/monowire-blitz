@@ -1,5 +1,5 @@
 {
-  "name": "@clankerkit/monad",
+  "name": "clankerkit",
   "version": "0.1.0",
   "description": "ClankerKit — Autonomous wallet SDK for AI agents on Monad",
   "type": "module",
@@ -12,6 +12,16 @@
       "types": "./dist/index.d.ts"
     }
   },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/0xsoydev/monowire-blitz.git",
+    "directory": "sdk"
+  },
+  "homepage": "https://github.com/0xsoydev/monowire-blitz/tree/clankerkit/sdk",
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc --noEmit"
@@ -21,7 +31,10 @@
     "ai",
     "agent",
     "wallet",
-    "sdk"
+    "sdk",
+    "blockchain",
+    "clankerkit",
+    "defi"
   ],
   "license": "MIT",
   "dependencies": {

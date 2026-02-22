@@ -1,17 +1,18 @@
 import type { Address } from 'viem';
 import { parseUnits } from 'viem';
-import { ClankerKit } from '../../sdk/src/wallet.js';
 import {
+  ClankerKit,
   TOKEN_ADDRESSES,
   TOKEN_DECIMALS,
-} from '../../sdk/src/constants.js';
+  deployAgentWallet,
+  deployPolicyEngine,
+} from 'clankerkit';
 import type {
   CrossChainSwapParams,
   PolicyConfig,
   TradeStrategy,
   TradeStrategyType,
-} from '../../sdk/src/types.js';
-import { deployAgentWallet, deployPolicyEngine } from '../../sdk/src/wallet.js';
+} from 'clankerkit';
 
 let clankerKit: ClankerKit | null = null;
 
