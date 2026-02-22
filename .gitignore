@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+sdk/dist/
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+
+# Environment / secrets
+.env
+contracts/.env
+
+# ClankerKit runtime state
+sdk/.clankerkit/
+.clankerkit/
+sdk/.agentkit/
+.agentkit/
+
+# OpenCode config (local editor)
+.opencode/
+
+# OS files
+.DS_Store
+Thumbs.db
