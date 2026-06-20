@@ -30,6 +30,51 @@ const walletClient = createWalletClient({
   transport: http(),
 });
 
+const GAS_LIMITS = {
+  createMarket: 500000n,
+  bet: 800000n,
+  resolveMarket: 300000n,
+  claimWinnings: 300000n,
+  updateScores: 2000000n,
+};
+
+const FAUCET_URL = "https://faucet.monad.xyz";
+
+async function checkBalance(): Promise<void> {
+  const [balance, fees] = await Promise.all([
+    publicClient.getBalance({ address: account.address }),
+    publicClient.estimateFeesPerGas().catch(() => null),
+  ]);
+
+  const totalGas =
+    GAS_LIMITS.createMarket +
+    GAS_LIMITS.bet * 2n +
+    GAS_LIMITS.resolveMarket +
+    GAS_LIMITS.claimWinnings +
+    GAS_LIMITS.updateScores;
+
+  const maxFeePerGas = fees?.maxFeePerGas ?? parseEther("0.00000018"); // fallback ~180 gwei
+  const estimatedGasCost = totalGas * maxFeePerGas;
+  const betValue = BET_AMOUNT * 2n;
+  const required = estimatedGasCost + betValue;
+  const buffer = (required * 15n) / 10n; // 1.5x buffer
+
+  console.log(`\n💼 Wallet: ${account.address}`);
+  console.log(`   Balance: ${formatEther(balance)} MON`);
+  console.log(`   Estimated max gas cost: ${formatEther(estimatedGasCost)} MON`);
+  console.log(`   Bet value (2x): ${formatEther(betValue)} MON`);
+  console.log(`   Required (with 1.5x buffer): ${formatEther(buffer)} MON`);
+
+  if (balance < buffer) {
+    console.log(`\n❌ Insufficient balance to run the full demo.`);
+    console.log(`   Send at least ${formatEther(buffer - balance)} MON to ${account.address}`);
+    console.log(`   Faucet: ${FAUCET_URL}`);
+    throw new Error("Insufficient balance — fund the wallet from the Monad testnet faucet");
+  }
+
+  console.log(`   ✅ Balance is sufficient`);
+}
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -221,7 +266,7 @@ async function printSummary() {
 
 async function main() {
   console.log("\n🚀 Monowire AgentBet — Live Hackathon Demo");
-  console.log(`   Wallet: ${account.address}`);
+  await checkBalance();
 
   const marketId = await createMarket();
   await placeBet(marketId, AGENT_YES, true, "YES");
