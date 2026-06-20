@@ -410,48 +410,59 @@ export default function Home() {
               <span className="text-[10px] font-black text-zinc-500 uppercase">{markets.length} total</span>
             </div>
             <div className="space-y-3">
-              {markets.map((m) => {
-                const total = m.totalYes + m.totalNo;
-                const yesPct = total > 0n ? Number((m.totalYes * 10000n) / total) / 100 : 50;
-                return (
-                  <div
-                    key={m.id.toString()}
-                    className="border-4 border-black bg-[#1a1a1a] p-4 shadow-[4px_4px_0px_0px_#000] hover:translate-x-1 hover:translate-y-1 hover:shadow-none transition-all"
-                  >
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
-                      <div className="flex-1 min-w-0">
-                        <p className="text-[10px] font-black text-zinc-500 uppercase tracking-wider">
-                          Market #{m.id.toString()}
-                        </p>
-                        <p className="font-black text-white text-sm sm:text-base truncate">{m.question}</p>
-                      </div>
-                      <span
-                        className={`${neoBadge(
-                          m.resolved ? "bg-emerald-400" : "bg-amber-400"
-                        )} shrink-0`}
-                      >
-                        {m.resolved ? "Resolved" : "Open"}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-4 text-sm">
-                      <div className="flex-1">
-                        <div className="h-4 border-4 border-black bg-[#0a0a0a] overflow-hidden">
-                          <div
-                            className="h-full bg-emerald-400"
-                            style={{ width: `${yesPct}%` }}
-                          />
+              {[...markets]
+                .sort((a, b) => {
+                  if (a.resolved && !b.resolved) return -1;
+                  if (!a.resolved && b.resolved) return 1;
+                  return Number(b.id - a.id);
+                })
+                .map((m) => {
+                  const total = m.totalYes + m.totalNo;
+                  const yesPct = total > 0n ? Number((m.totalYes * 10000n) / total) / 100 : 50;
+                  const outcomeLabel = m.resolved ? (m.outcome === 1 ? "YES" : "NO") : "Open";
+                  const outcomeColor = m.resolved ? (m.outcome === 1 ? "bg-emerald-400" : "bg-rose-400") : "bg-amber-400";
+                  return (
+                    <div
+                      key={m.id.toString()}
+                      className="border-4 border-black bg-[#1a1a1a] shadow-[4px_4px_0px_0px_#000] hover:translate-x-1 hover:translate-y-1 hover:shadow-none transition-all overflow-hidden"
+                    >
+                      {m.resolved && (
+                        <div className={`h-2 ${outcomeColor} border-b-4 border-black`} />
+                      )}
+                      <div className="p-4">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-[10px] font-black text-zinc-500 uppercase tracking-wider">
+                              Market #{m.id.toString()}
+                            </p>
+                            <p className="font-black text-white text-sm sm:text-base truncate">{m.question}</p>
+                          </div>
+                          <span
+                            className={`${neoBadge(outcomeColor)} shrink-0`}
+                          >
+                            {outcomeLabel}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-4 text-sm">
+                          <div className="flex-1">
+                            <div className="h-4 border-4 border-black bg-[#0a0a0a] overflow-hidden">
+                              <div
+                                className="h-full bg-emerald-400"
+                                style={{ width: `${yesPct}%` }}
+                              />
+                            </div>
+                          </div>
+                          <div className="text-right min-w-[100px]">
+                            <p className="font-black text-white">{formatMON(total)}</p>
+                            <p className="text-[10px] font-black text-zinc-500">
+                              {m.resolved ? `${yesPct.toFixed(1)}% YES` : "Voting"}
+                            </p>
+                          </div>
                         </div>
                       </div>
-                      <div className="text-right min-w-[100px]">
-                        <p className="font-black text-white">{formatMON(total)}</p>
-                        <p className="text-[10px] font-black text-zinc-500">
-                          {m.resolved ? (m.outcome === 1 ? "YES" : "NO") : "Open"}
-                        </p>
-                      </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
             </div>
           </div>
         )}
