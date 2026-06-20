@@ -72,6 +72,7 @@ const statsAccent = ["bg-yellow-400", "bg-pink-400", "bg-cyan-400", "bg-lime-400
 
 export default function Home() {
   const [market, setMarket] = useState<Market | null>(null);
+  const [markets, setMarkets] = useState<Market[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [marketCount, setMarketCount] = useState<bigint | null>(null);
   const [blockNumber, setBlockNumber] = useState<bigint | null>(null);
@@ -90,29 +91,34 @@ export default function Home() {
       setMarketCount(count);
 
       let latestMarket: Market | null = null;
+      const marketData: Market[] = [];
       if (count > 0n) {
         const latestId = count - 1n;
-        await sleep(150);
 
-        const info = await readWithRetry(() =>
-          publicClient.readContract({
-            address: AGENT_MARKET_ADDRESS,
-            abi: AGENT_MARKET_ABI,
-            functionName: "getMarketInfo",
-            args: [latestId],
-          })
-        );
-        latestMarket = {
-          id: latestId,
-          question: info[0],
-          resolutionTime: info[1],
-          creator: info[2],
-          oracle: info[3],
-          resolved: info[4],
-          outcome: info[5],
-          totalYes: info[6],
-          totalNo: info[7],
-        };
+        for (let i = 0n; i < count; i++) {
+          await sleep(150);
+          const info = await readWithRetry(() =>
+            publicClient.readContract({
+              address: AGENT_MARKET_ADDRESS,
+              abi: AGENT_MARKET_ABI,
+              functionName: "getMarketInfo",
+              args: [i],
+            })
+          );
+          const m = {
+            id: i,
+            question: info[0],
+            resolutionTime: info[1],
+            creator: info[2],
+            oracle: info[3],
+            resolved: info[4],
+            outcome: info[5],
+            totalYes: info[6],
+            totalNo: info[7],
+          };
+          marketData.push(m);
+          if (i === latestId) latestMarket = m;
+        }
 
         const agentData: Agent[] = [];
         for (const id of AGENT_IDS) {
@@ -142,6 +148,7 @@ export default function Home() {
       } else {
         setAgents(AGENT_IDS.map((id) => ({ id, owner: "0x", score: 0n })));
       }
+      setMarkets(marketData);
       setMarket(latestMarket);
 
       await sleep(150);
@@ -391,6 +398,60 @@ export default function Home() {
                   );
                 })}
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* Past Markets */}
+        {!loading && markets.length > 0 && (
+          <div className={`${neoCard} p-6 space-y-4`}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-black text-white uppercase tracking-tight">All Markets</h3>
+              <span className="text-[10px] font-black text-zinc-500 uppercase">{markets.length} total</span>
+            </div>
+            <div className="space-y-3">
+              {markets.map((m) => {
+                const total = m.totalYes + m.totalNo;
+                const yesPct = total > 0n ? Number((m.totalYes * 10000n) / total) / 100 : 50;
+                return (
+                  <div
+                    key={m.id.toString()}
+                    className="border-4 border-black bg-[#1a1a1a] p-4 shadow-[4px_4px_0px_0px_#000] hover:translate-x-1 hover:translate-y-1 hover:shadow-none transition-all"
+                  >
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
+                      <div className="flex-1 min-w-0">
+                        <p className="text-[10px] font-black text-zinc-500 uppercase tracking-wider">
+                          Market #{m.id.toString()}
+                        </p>
+                        <p className="font-black text-white text-sm sm:text-base truncate">{m.question}</p>
+                      </div>
+                      <span
+                        className={`${neoBadge(
+                          m.resolved ? "bg-emerald-400" : "bg-amber-400"
+                        )} shrink-0`}
+                      >
+                        {m.resolved ? "Resolved" : "Open"}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-4 text-sm">
+                      <div className="flex-1">
+                        <div className="h-4 border-4 border-black bg-[#0a0a0a] overflow-hidden">
+                          <div
+                            className="h-full bg-emerald-400"
+                            style={{ width: `${yesPct}%` }}
+                          />
+                        </div>
+                      </div>
+                      <div className="text-right min-w-[100px]">
+                        <p className="font-black text-white">{formatMON(total)}</p>
+                        <p className="text-[10px] font-black text-zinc-500">
+                          {m.resolved ? (m.outcome === 1 ? "YES" : "NO") : "Open"}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}

@@ -1,13 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { createWalletClient, http, type WalletClient } from "viem";
+import { createWalletClient, http, parseEther, type WalletClient } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { wrapFetchWithPayment } from "@x402/fetch";
 import { x402Client } from "@x402/core/client";
 import { ExactEvmScheme } from "@x402/evm";
-import { monadTestnet } from "@/lib/contracts";
+import { monadTestnet, publicClient, AGENT_MARKET_ADDRESS, AGENT_MARKET_ABI } from "@/lib/contracts";
 
 const MONAD_USDC_TESTNET = "0x534b2f3A21130d7a60830c2Df862319e593943A3";
-
 const KEYSTORE_FILE = "e803ff23-8173-4f8d-a5b9-dde7ee76159f";
 
 function getPrivateKey(): `0x${string}` {
@@ -33,17 +32,24 @@ export async function GET(request: NextRequest) {
   try {
     const renterId = request.nextUrl.searchParams.get("renter");
     const renteeId = request.nextUrl.searchParams.get("rentee");
+    const marketId = request.nextUrl.searchParams.get("marketId");
+    const side = request.nextUrl.searchParams.get("side"); // "yes" or "no"
 
-    if (!renterId || !renteeId) {
-      return NextResponse.json({ error: "renter and rentee agent IDs required" }, { status: 400 });
+    if (!renterId || !renteeId || !marketId || !side) {
+      return NextResponse.json(
+        { error: "renter, rentee, marketId, and side are required" },
+        { status: 400 }
+      );
     }
 
+    const isYes = side === "yes";
     const walletClient = createAgentWalletClient();
     const address = walletClient.account?.address;
     if (!address) {
       return NextResponse.json({ error: "Could not load agent wallet" }, { status: 500 });
     }
 
+    // 1. Pay x402 rental fee
     const evmSigner = {
       address,
       signTypedData: async (message: {
@@ -70,22 +76,40 @@ export async function GET(request: NextRequest) {
       ? `https://${process.env.VERCEL_URL}`
       : process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
 
-    const response = await paymentFetch(`${baseUrl}/api/rent?agentId=${renteeId}`, {
+    const rentalResponse = await paymentFetch(`${baseUrl}/api/rent?agentId=${renteeId}`, {
       method: "GET",
       headers: { "Content-Type": "application/json" },
     });
 
-    if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      return NextResponse.json({ error: text || `Payment failed: ${response.status}` }, { status: 502 });
+    if (!rentalResponse.ok) {
+      const text = await rentalResponse.text().catch(() => "");
+      return NextResponse.json({ error: text || `Rental payment failed: ${rentalResponse.status}` }, { status: 502 });
     }
 
-    const data = await response.json();
+    // 2. Place bet on behalf of the rented agent
+    const betAmount = parseEther("0.001");
+    const tx = await walletClient.writeContract({
+      account: address,
+      address: AGENT_MARKET_ADDRESS,
+      abi: AGENT_MARKET_ABI,
+      functionName: "bet",
+      args: [BigInt(marketId), BigInt(renteeId), isYes],
+      value: betAmount,
+      gas: 800000n,
+      chain: monadTestnet,
+    });
+
+    const receipt = await publicClient.waitForTransactionReceipt({ hash: tx });
+
     return NextResponse.json({
-      ...data,
+      rented: true,
       renterId,
       renteeId,
+      marketId,
+      side: isYes ? "YES" : "NO",
+      betAmount: "0.001",
       paidBy: address,
+      betTxHash: receipt.transactionHash,
     });
   } catch (err) {
     return NextResponse.json(

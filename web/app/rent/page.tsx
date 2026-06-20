@@ -14,6 +14,18 @@ const AGENT_IDS = [1777, 1778, 1779];
 const POLL_INTERVAL_MS = 20_000;
 const RPC_RETRY_DELAY_MS = 800;
 
+interface Market {
+  id: bigint;
+  question: string;
+  resolutionTime: bigint;
+  creator: string;
+  oracle: string;
+  resolved: boolean;
+  outcome: number;
+  totalYes: bigint;
+  totalNo: bigint;
+}
+
 interface Agent {
   id: number;
   owner: string;
@@ -48,6 +60,8 @@ async function readWithRetry<T>(fn: () => Promise<T>, retries = 5): Promise<T> {
 const neoCard = "border-4 border-black bg-[#141414] shadow-[6px_6px_0px_0px_#000]";
 const neoButton = "border-4 border-black bg-violet-400 hover:bg-violet-300 text-black font-black shadow-[4px_4px_0px_0px_#000] hover:shadow-[2px_2px_0px_0px_#000] hover:translate-x-[2px] hover:translate-y-[2px] transition-all";
 const neoButtonOutline = "border-4 border-black bg-transparent hover:bg-zinc-800 text-white font-black shadow-[4px_4px_0px_0px_#000] hover:shadow-[2px_2px_0px_0px_#000] hover:translate-x-[2px] hover:translate-y-[2px] transition-all";
+const neoButtonSmall = (color: string) =>
+  `border-4 border-black ${color} hover:brightness-110 text-black font-black shadow-[3px_3px_0px_0px_#000] hover:shadow-[1px_1px_0px_0px_#000] hover:translate-x-[1px] hover:translate-y-[1px] transition-all`;
 const neoBadge = (color: string) => `border-4 border-black px-3 py-1 font-black text-xs shadow-[3px_3px_0px_0px_#000] uppercase ${color}`;
 const neoSelect = "border-4 border-black bg-[#1a1a1a] text-white font-black px-3 py-2 shadow-[3px_3px_0px_0px_#000] focus:outline-none focus:ring-4 focus:ring-violet-400 focus:ring-offset-4 focus:ring-offset-[#0a0a0a]";
 
@@ -118,18 +132,21 @@ function LineChart({ data, color }: { data: number[]; color: string }) {
 
 export default function RentPage() {
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [markets, setMarkets] = useState<Market[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
-  const [renterAgentId, setRenterAgentId] = useState<number>(AGENT_IDS[AGENT_IDS.length - 1]);
+  const [renterAgentId, setRenterAgentId] = useState<number>(AGENT_IDS[0]);
+  const [renteeAgentId, setRenteeAgentId] = useState<number | null>(null);
+  const [selectedMarketId, setSelectedMarketId] = useState<string>("");
+  const [selectedSide, setSelectedSide] = useState<"yes" | "no">("yes");
   const [paying, setPaying] = useState(false);
   const [payError, setPayError] = useState<string | null>(null);
-  const [rented, setRented] = useState(false);
-  const [receipt, setReceipt] = useState<{ paidBy?: string; txHash?: string } | null>(null);
+  const [result, setResult] = useState<any | null>(null);
   const [blockNumber, setBlockNumber] = useState<bigint | null>(null);
 
   const load = useCallback(async () => {
     try {
+      // Load agents
       const agentData: Agent[] = [];
       for (const id of AGENT_IDS) {
         await sleep(id === AGENT_IDS[0] ? 0 : 150);
@@ -158,15 +175,52 @@ export default function RentPage() {
       }
       setAgents(agentData);
 
+      // Load all markets
+      await sleep(150);
+      const count = await readWithRetry(() =>
+        publicClient.readContract({
+          address: AGENT_MARKET_ADDRESS,
+          abi: AGENT_MARKET_ABI,
+          functionName: "marketCount",
+        })
+      );
+      const marketData: Market[] = [];
+      for (let i = 0n; i < count; i++) {
+        await sleep(150);
+        const info = await readWithRetry(() =>
+          publicClient.readContract({
+            address: AGENT_MARKET_ADDRESS,
+            abi: AGENT_MARKET_ABI,
+            functionName: "getMarketInfo",
+            args: [i],
+          })
+        );
+        marketData.push({
+          id: i,
+          question: info[0],
+          resolutionTime: info[1],
+          creator: info[2],
+          oracle: info[3],
+          resolved: info[4],
+          outcome: info[5],
+          totalYes: info[6],
+          totalNo: info[7],
+        });
+      }
+      setMarkets(marketData);
+      if (marketData.length > 0 && selectedMarketId === "") {
+        setSelectedMarketId(marketData[marketData.length - 1].id.toString());
+      }
+
       const block = await readWithRetry(() => publicClient.getBlockNumber());
       setBlockNumber(block);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load agents");
+      setError(err instanceof Error ? err.message : "Failed to load data");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [selectedMarketId]);
 
   useEffect(() => {
     load();
@@ -174,31 +228,40 @@ export default function RentPage() {
     return () => clearInterval(interval);
   }, [load]);
 
-  const handleRent = async (agent: Agent) => {
-    setSelectedAgent(agent);
+  const randomMarket = () => {
+    const openMarkets = markets.filter((m) => !m.resolved);
+    const pool = openMarkets.length > 0 ? openMarkets : markets;
+    if (pool.length === 0) return;
+    const random = pool[Math.floor(Math.random() * pool.length)];
+    setSelectedMarketId(random.id.toString());
+  };
+
+  const handleRent = async () => {
+    if (!renteeAgentId) {
+      setPayError("Select an agent to rent");
+      return;
+    }
+    if (!selectedMarketId) {
+      setPayError("Select a market to bet on");
+      return;
+    }
+
     setPaying(true);
     setPayError(null);
-    setRented(false);
-    setReceipt(null);
+    setResult(null);
 
     try {
-      const response = await fetch(`/api/rent-agent?renter=${renterAgentId}&rentee=${agent.id}`, {
-        method: "GET",
-        headers: { "Content-Type": "application/json" },
-      });
-
+      const response = await fetch(
+        `/api/rent-agent?renter=${renterAgentId}&rentee=${renteeAgentId}&marketId=${selectedMarketId}&side=${selectedSide}`,
+        { method: "GET", headers: { "Content-Type": "application/json" } }
+      );
       const data = await response.json().catch(() => ({ error: "Invalid response" }));
 
       if (!response.ok) {
         throw new Error(data.error || `Rental failed: ${response.status}`);
       }
 
-      if (data.rented) {
-        setRented(true);
-        setReceipt({ paidBy: data.paidBy, txHash: data.txHash });
-      } else {
-        throw new Error("Rental not confirmed");
-      }
+      setResult(data);
     } catch (err) {
       setPayError(err instanceof Error ? err.message : "Rental failed");
     } finally {
@@ -207,11 +270,12 @@ export default function RentPage() {
   };
 
   const sortedAgents = [...agents].sort((a, b) => b.winRate - a.winRate);
+  const openMarkets = markets.filter((m) => !m.resolved);
 
   const stats = [
     { label: "Agents", value: agents.length.toString(), accent: statsAccent[0] },
-    { label: "Avg Win Rate", value: agents.length ? `${Math.round(agents.reduce((a, b) => a + b.winRate, 0) / agents.length)}%` : "—", accent: statsAccent[1] },
-    { label: "Best Agent", value: sortedAgents[0] ? `#${sortedAgents[0].id}` : "—", accent: statsAccent[2] },
+    { label: "Markets", value: markets.length.toString(), accent: statsAccent[1] },
+    { label: "Open", value: openMarkets.length.toString(), accent: statsAccent[2] },
     { label: "Block", value: blockNumber !== null ? blockNumber.toString() : "—", accent: statsAccent[3] },
   ];
 
@@ -233,15 +297,12 @@ export default function RentPage() {
           <div className="flex-1 max-w-md hidden md:block">
             <div className="border-4 border-black bg-[#1a1a1a] px-4 py-2 shadow-[3px_3px_0px_0px_#000]">
               <p className="text-xs font-black text-zinc-500 uppercase tracking-wider">
-                x402 · Agent-to-Agent Payments · Monad Testnet
+                x402 · Agent-to-Agent · Rent & Bet
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-3">
-            <div className="border-4 border-black bg-lime-400 px-3 py-1.5 shadow-[3px_3px_0px_0px_#fff]">
-              <span className="text-xs font-black text-black">AGENT WALLET ENABLED</span>
-            </div>
             <Link href="/" className={`${neoButtonOutline} px-4 py-2 text-sm uppercase`}>
               BACK TO MARKETS
             </Link>
@@ -253,40 +314,21 @@ export default function RentPage() {
         {/* Hero */}
         <section className="text-center space-y-4 max-w-2xl mx-auto">
           <div className="inline-block border-4 border-black bg-violet-400 px-4 py-2 shadow-[5px_5px_0px_0px_#fff]">
-            <span className="font-black text-black text-sm tracking-widest">X402 · AGENT RENTS AGENT</span>
+            <span className="font-black text-black text-sm tracking-widest">X402 · RENT · BET</span>
           </div>
           <h2 className="text-4xl sm:text-5xl font-black text-white tracking-tight uppercase leading-none">
-            Let agents hire agents.
+            Rent an agent. Pick a market. Bet.
           </h2>
           <p className="text-zinc-400 text-base sm:text-lg font-medium leading-relaxed">
-            One ERC-8004 agent pays another via x402. No human wallet required — the renting agent signs with its own on-chain identity.
+            Your agent pays another agent via x402. The rented agent then places a bet on your chosen market.
           </p>
         </section>
-
-        {/* Renter selector */}
-        <div className={`${neoCard} p-4 flex flex-col sm:flex-row items-center justify-between gap-4`}>
-          <div className="space-y-1">
-            <p className="text-[10px] font-black text-zinc-500 uppercase tracking-wider">Renting Agent (Payer)</p>
-            <p className="text-sm font-bold text-zinc-300">Select which agent will pay USDC to rent another agent.</p>
-          </div>
-          <select
-            value={renterAgentId}
-            onChange={(e) => setRenterAgentId(Number(e.target.value))}
-            className={neoSelect}
-          >
-            {AGENT_IDS.map((id) => (
-              <option key={id} value={id} className="bg-[#1a1a1a]">
-                Agent #{id}
-              </option>
-            ))}
-          </select>
-        </div>
 
         {/* Error */}
         {error && (
           <div className={`${neoCard} p-4 flex items-start justify-between gap-4`}>
             <div className="space-y-1">
-              <p className="font-black text-white uppercase">COULD NOT LOAD AGENTS</p>
+              <p className="font-black text-white uppercase">COULD NOT LOAD DATA</p>
               <p className="text-sm font-bold text-zinc-400">{error}</p>
             </div>
             <button onClick={load} className={`${neoButton} px-4 py-2 text-sm uppercase`}>
@@ -307,146 +349,164 @@ export default function RentPage() {
 
         {/* Loading */}
         {loading && agents.length === 0 && !error && (
-          <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-6">
-            {[1, 2, 3].map((i) => (
-              <div key={i} className="h-96 border-4 border-black bg-[#1a1a1a] animate-pulse shadow-[6px_6px_0px_0px_#000]" />
-            ))}
+          <div className="grid md:grid-cols-2 gap-6">
+            <div className="h-96 border-4 border-black bg-[#1a1a1a] animate-pulse shadow-[6px_6px_0px_0px_#000]" />
+            <div className="h-96 border-4 border-black bg-[#1a1a1a] animate-pulse shadow-[6px_6px_0px_0px_#000]" />
           </div>
         )}
 
-        {/* Agent grid */}
-        <div className="grid md:grid-cols-2 xl:grid-cols-3 gap-6">
-          {sortedAgents.map((agent, index) => {
-            const accent = agentAccent[index % agentAccent.length];
-            const chartColor = agent.score >= 0n ? "#34d399" : "#fb7185";
-            const profitable = agent.score >= 0n;
-            const isSelf = agent.id === renterAgentId;
-            return (
-              <div key={agent.id} className={`${neoCard} p-5 flex flex-col gap-5 ${isSelf ? "opacity-60" : ""}`}>
-                <div className="flex items-center gap-4">
-                  <div className={`w-14 h-14 border-4 border-black ${accent} flex items-center justify-center shadow-[3px_3px_0px_0px_#fff]`}>
-                    <span className="text-sm font-black text-black">A{agent.id}</span>
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-black text-white text-lg uppercase truncate">Agent #{agent.id}</p>
-                    <p className="text-[10px] font-black text-zinc-500 font-mono truncate">
-                      {agent.owner === "0x" ? "UNREGISTERED" : agent.owner}
-                    </p>
-                  </div>
-                  <div className={`${neoBadge(profitable ? "bg-emerald-400" : "bg-rose-400")} text-black`}>
-                    #{index + 1}
-                  </div>
-                </div>
+        {!loading && (
+          <div className="grid lg:grid-cols-2 gap-6 items-start">
+            {/* Control panel */}
+            <div className={`${neoCard} p-6 space-y-6`}>
+              <h3 className="text-2xl font-black text-white uppercase">Build Your Bet</h3>
 
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="border-4 border-black bg-[#1a1a1a] p-3">
-                    <p className="text-[10px] font-black text-zinc-500 uppercase tracking-wider mb-1">Win Rate</p>
-                    <p className={`text-2xl font-black ${profitable ? "text-emerald-400" : "text-rose-400"}`}>
-                      {agent.winRate}%
-                    </p>
-                  </div>
-                  <div className="border-4 border-black bg-[#1a1a1a] p-3">
-                    <p className="text-[10px] font-black text-zinc-500 uppercase tracking-wider mb-1">Score</p>
-                    <p className={`text-2xl font-black ${profitable ? "text-emerald-400" : "text-rose-400"}`}>
-                      {agent.score.toString()}
-                    </p>
-                  </div>
-                </div>
+              {/* Renter selector */}
+              <div className="space-y-2">
+                <label className="text-xs font-black text-zinc-500 uppercase tracking-wider">1. Your Agent (Payer)</label>
+                <select
+                  value={renterAgentId}
+                  onChange={(e) => setRenterAgentId(Number(e.target.value))}
+                  className={`${neoSelect} w-full`}
+                >
+                  {agents.map((agent) => (
+                    <option key={agent.id} value={agent.id} className="bg-[#1a1a1a]">
+                      Agent #{agent.id} — Score {agent.score.toString()} — Win {agent.winRate}%
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-                <div className="border-4 border-black bg-[#1a1a1a] p-3">
-                  <p className="text-[10px] font-black text-zinc-500 uppercase tracking-wider mb-2">Trade History</p>
-                  <LineChart data={agent.history} color={chartColor} />
-                </div>
-
-                <div className="flex items-center justify-between border-t-4 border-zinc-800 pt-4 mt-auto">
-                  <div>
-                    <p className="text-[10px] font-black text-zinc-500 uppercase tracking-wider">Rent Price</p>
-                    <p className="text-xl font-black text-white">{agent.price} USDC</p>
-                  </div>
-                  <button
-                    onClick={() => handleRent(agent)}
-                    disabled={paying || isSelf}
-                    className={`${neoButton} px-5 py-2.5 text-sm uppercase ${paying || isSelf ? "opacity-75 cursor-not-allowed" : ""}`}
-                    title={isSelf ? "An agent cannot rent itself" : "Rent with agent wallet"}
+              {/* Market selector */}
+              <div className="space-y-2">
+                <label className="text-xs font-black text-zinc-500 uppercase tracking-wider">3. Market to Bet On</label>
+                <div className="flex gap-2">
+                  <select
+                    value={selectedMarketId}
+                    onChange={(e) => setSelectedMarketId(e.target.value)}
+                    className={`${neoSelect} w-full`}
                   >
-                    {isSelf ? "SELF" : paying ? "RENTING…" : "RENT"}
+                    {markets.length === 0 && (
+                      <option value="" className="bg-[#1a1a1a]">No markets</option>
+                    )}
+                    {markets.map((market) => (
+                      <option key={market.id.toString()} value={market.id.toString()} className="bg-[#1a1a1a]">
+                        Market #{market.id.toString()}: {market.question.slice(0, 50)}
+                        {market.question.length > 50 ? "…" : ""} {market.resolved ? "(Resolved)" : "(Open)"}
+                      </option>
+                    ))}
+                  </select>
+                  <button onClick={randomMarket} className={`${neoButtonSmall("bg-amber-400")} px-3 py-2 text-sm uppercase whitespace-nowrap`}>
+                    RANDOM
                   </button>
                 </div>
               </div>
-            );
-          })}
-        </div>
-      </main>
 
-      {/* Payment Modal */}
-      {selectedAgent && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80">
-          <div className={`${neoCard} w-full max-w-md p-6 relative`}>
-            <button
-              onClick={() => setSelectedAgent(null)}
-              className="absolute top-3 right-3 w-8 h-8 border-4 border-black bg-rose-400 text-black font-black flex items-center justify-center shadow-[2px_2px_0px_0px_#fff]"
-            >
-              ×
-            </button>
-
-            {rented ? (
-              <div className="text-center space-y-4">
-                <div className="border-4 border-black bg-emerald-400 p-4">
-                  <p className="font-black text-black text-lg uppercase">AGENT RENTED</p>
-                  <p className="text-sm font-black text-black mt-1">
-                    Agent #{renterAgentId} paid for Agent #{selectedAgent.id}.
-                  </p>
-                  {receipt?.paidBy && (
-                    <p className="text-xs font-black text-black mt-2 font-mono break-all">Paid by: {receipt.paidBy}</p>
-                  )}
+              {/* Side selector */}
+              <div className="space-y-2">
+                <label className="text-xs font-black text-zinc-500 uppercase tracking-wider">4. Bet Side</label>
+                <div className="grid grid-cols-2 gap-4">
+                  <button
+                    onClick={() => setSelectedSide("yes")}
+                    className={`border-4 border-black py-3 font-black text-lg uppercase transition-all ${
+                      selectedSide === "yes" ? "bg-emerald-400 text-black shadow-[4px_4px_0px_0px_#fff]" : "bg-[#1a1a1a] text-zinc-400"
+                    }`}
+                  >
+                    YES
+                  </button>
+                  <button
+                    onClick={() => setSelectedSide("no")}
+                    className={`border-4 border-black py-3 font-black text-lg uppercase transition-all ${
+                      selectedSide === "no" ? "bg-rose-400 text-black shadow-[4px_4px_0px_0px_#fff]" : "bg-[#1a1a1a] text-zinc-400"
+                    }`}
+                  >
+                    NO
+                  </button>
                 </div>
-                <button onClick={() => setSelectedAgent(null)} className={`${neoButton} w-full py-3 text-lg uppercase`}>
-                  CLOSE
-                </button>
               </div>
-            ) : (
-              <>
-                <h3 className="text-2xl font-black text-white uppercase mb-4">
-                  Agent #{renterAgentId} → Agent #{selectedAgent.id}
-                </h3>
 
-                <div className="space-y-4 mb-6">
-                  <div className="border-4 border-black bg-[#1a1a1a] p-3">
-                    <p className="text-[10px] font-black text-zinc-500 uppercase tracking-wider">x402 Payment Request</p>
-                    <p className="text-sm font-bold text-zinc-300">
-                      Agent #{renterAgentId} will pay {selectedAgent.price} USDC to rent Agent #{selectedAgent.id} for 1 hour.
-                    </p>
-                  </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="border-4 border-black bg-[#1a1a1a] p-3">
-                      <p className="text-[10px] font-black text-zinc-500 uppercase tracking-wider">Amount</p>
-                      <p className="font-black text-white text-lg">{selectedAgent.price} USDC</p>
-                    </div>
-                    <div className="border-4 border-black bg-[#1a1a1a] p-3">
-                      <p className="text-[10px] font-black text-zinc-500 uppercase tracking-wider">Win Rate</p>
-                      <p className="font-black text-emerald-400 text-lg">{selectedAgent.winRate}%</p>
-                    </div>
-                  </div>
+              {/* Pay button */}
+              {payError && (
+                <div className="border-4 border-black bg-rose-950 p-3">
+                  <p className="text-sm font-black text-rose-200">{payError}</p>
                 </div>
+              )}
 
-                {payError && (
-                  <div className="border-4 border-black bg-rose-950 p-3 mb-4">
-                    <p className="text-sm font-black text-rose-200">{payError}</p>
-                  </div>
-                )}
-
+              {result ? (
+                <div className="border-4 border-black bg-emerald-400 p-4 space-y-2">
+                  <p className="font-black text-black text-lg uppercase">BET PLACED</p>
+                  <p className="text-sm font-black text-black">
+                    Agent #{result.renteeId} bet {result.side} on Market #{result.marketId}
+                  </p>
+                  <p className="text-xs font-black text-black font-mono break-all">Tx: {result.betTxHash}</p>
+                </div>
+              ) : (
                 <button
-                  onClick={() => handleRent(selectedAgent)}
-                  disabled={paying}
-                  className={`${neoButton} w-full py-3 text-lg uppercase ${paying ? "opacity-75 cursor-wait" : ""}`}
+                  onClick={handleRent}
+                  disabled={paying || !renteeAgentId || !selectedMarketId}
+                  className={`${neoButton} w-full py-4 text-lg uppercase ${paying || !renteeAgentId || !selectedMarketId ? "opacity-75 cursor-not-allowed" : ""}`}
                 >
-                  {paying ? "AGENT PAYING VIA X402…" : "CONFIRM AGENT PAYMENT"}
+                  {paying ? "RENTING & BETTING…" : "RENT AGENT & PLACE BET"}
                 </button>
-              </>
-            )}
+              )}
+            </div>
+
+            {/* Agent selection */}
+            <div className="space-y-4">
+              <p className="text-xs font-black text-zinc-500 uppercase tracking-wider">2. Select Agent to Rent</p>
+              {sortedAgents.map((agent, index) => {
+                const accent = agentAccent[index % agentAccent.length];
+                const chartColor = agent.score >= 0n ? "#34d399" : "#fb7185";
+                const profitable = agent.score >= 0n;
+                const selected = renteeAgentId === agent.id;
+                const isRenter = renterAgentId === agent.id;
+                return (
+                  <button
+                    key={agent.id}
+                    onClick={() => setRenteeAgentId(agent.id)}
+                    className={`w-full text-left ${neoCard} p-4 flex flex-col gap-4 hover:translate-x-1 hover:translate-y-1 hover:shadow-[4px_4px_0px_0px_#000] transition-all ${selected ? "ring-4 ring-violet-400 ring-offset-4 ring-offset-[#0a0a0a]" : ""} ${isRenter ? "opacity-50" : ""}`}
+                    disabled={isRenter}
+                    title={isRenter ? "This is your payer agent" : ""}
+                  >
+                    <div className="flex items-center gap-4">
+                      <div className={`w-14 h-14 border-4 border-black ${accent} flex items-center justify-center shadow-[3px_3px_0px_0px_#fff]`}>
+                        <span className="text-sm font-black text-black">A{agent.id}</span>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-black text-white text-lg uppercase truncate">Agent #{agent.id}</p>
+                        <p className="text-[10px] font-black text-zinc-500 font-mono truncate">
+                          {agent.owner === "0x" ? "UNREGISTERED" : agent.owner}
+                        </p>
+                      </div>
+                      <div className={`${neoBadge(profitable ? "bg-emerald-400" : "bg-rose-400")} text-black`}>
+                        #{index + 1}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="border-4 border-black bg-[#1a1a1a] p-3">
+                        <p className="text-[10px] font-black text-zinc-500 uppercase tracking-wider mb-1">Win Rate</p>
+                        <p className={`text-2xl font-black ${profitable ? "text-emerald-400" : "text-rose-400"}`}>
+                          {agent.winRate}%
+                        </p>
+                      </div>
+                      <div className="border-4 border-black bg-[#1a1a1a] p-3">
+                        <p className="text-[10px] font-black text-zinc-500 uppercase tracking-wider mb-1">Rent Price</p>
+                        <p className="text-xl font-black text-white">{agent.price} USDC</p>
+                      </div>
+                    </div>
+
+                    <div className="border-4 border-black bg-[#1a1a1a] p-3">
+                      <p className="text-[10px] font-black text-zinc-500 uppercase tracking-wider mb-2">Trade History</p>
+                      <LineChart data={agent.history} color={chartColor} />
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </main>
 
       {/* Footer */}
       <footer className="border-t-4 border-black pt-8 pb-10 text-center">
