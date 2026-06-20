@@ -41,6 +41,24 @@ export const monadTestnet = defineChain({
 export const IDENTITY_REGISTRY = "0x8004A818BFB912233c491871b3d84c89A494BD9e";
 export const REPUTATION_REGISTRY = "0x8004B663056A597Dffe9eCcC1965A193B7388713";
 export const USDC_TESTNET = "0x534b2f3A21130d7a60830c2Df862319e593943A3";
+export const PYTH = "0x2880aB155794e7179c9eE2e38200202908C17B43";
+export const PYTH_BETA = "0xad2B52D2af1a9bD5c561894Cdd84f7505e1CD0B5";
+
+export const PYTH_FEED_ETH_USD = "0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace";
+export const PYTH_FEED_BTC_USD = "0xe62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43";
+export const PYTH_FEED_MON_USD = "0x31491744e2dbf6df7fcf4ac0820d18a609b49076d45066d3568424e62f686cd1";
+export const PYTH_FEED_SOL_USD = "0xef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d";
+export const PYTH_FEED_USDC_USD = "0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a";
+export const PYTH_FEED_USDT_USD = "0x2b89b9dc8fdf9f34709a5b106b472f0f39bb6ca9ce04b0fd7f2e971688e2e53b";
+
+export const PYTH_FEED_EXPONENTS: Record<string, number> = {
+  [PYTH_FEED_ETH_USD]: -8,
+  [PYTH_FEED_BTC_USD]: -8,
+  [PYTH_FEED_MON_USD]: -8,
+  [PYTH_FEED_SOL_USD]: -8,
+  [PYTH_FEED_USDC_USD]: -8,
+  [PYTH_FEED_USDT_USD]: -8,
+};
 
 export const IDENTITY_REGISTRY_ABI = [
   {
@@ -155,6 +173,19 @@ export const AGENT_MARKET_ABI = [
   },
   {
     type: "function",
+    name: "createMarketWithPyth",
+    inputs: [
+      { internalType: "string", name: "question", type: "string" },
+      { internalType: "uint256", name: "resolutionTime", type: "uint256" },
+      { internalType: "bytes32", name: "priceFeedId", type: "bytes32" },
+      { internalType: "int64", name: "targetPrice", type: "int64" },
+      { internalType: "bool", name: "isAbove", type: "bool" },
+    ],
+    outputs: [{ internalType: "uint256", name: "marketId", type: "uint256" }],
+    stateMutability: "nonpayable",
+  },
+  {
+    type: "function",
     name: "getMarketInfo",
     inputs: [{ internalType: "uint256", name: "marketId", type: "uint256" }],
     outputs: [
@@ -166,6 +197,9 @@ export const AGENT_MARKET_ABI = [
       { internalType: "uint8", name: "outcome", type: "uint8" },
       { internalType: "uint256", name: "totalYes", type: "uint256" },
       { internalType: "uint256", name: "totalNo", type: "uint256" },
+      { internalType: "bytes32", name: "priceFeedId", type: "bytes32" },
+      { internalType: "int64", name: "targetPrice", type: "int64" },
+      { internalType: "bool", name: "isAbove", type: "bool" },
     ],
     stateMutability: "view",
   },
@@ -224,6 +258,30 @@ export const AGENT_MARKET_ABI = [
   },
   {
     type: "function",
+    name: "resolveMarketWithPyth",
+    inputs: [
+      { internalType: "uint256", name: "marketId", type: "uint256" },
+      { internalType: "bytes[]", name: "priceUpdateData", type: "bytes[]" },
+    ],
+    outputs: [],
+    stateMutability: "payable",
+  },
+  {
+    type: "function",
+    name: "pyth",
+    inputs: [],
+    outputs: [{ internalType: "address", name: "", type: "address" }],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
+    name: "PYTH_MAX_PRICE_AGE",
+    inputs: [],
+    outputs: [{ internalType: "uint256", name: "", type: "uint256" }],
+    stateMutability: "view",
+  },
+  {
+    type: "function",
     name: "updateAllAgentScores",
     inputs: [{ internalType: "uint256", name: "marketId", type: "uint256" }],
     outputs: [],
@@ -241,7 +299,19 @@ export const AGENT_MARKET_ABI = [
   },
 ] as const;
 
-export const AGENT_MARKET_ADDRESS = (process.env.AGENT_MARKET_ADDRESS || "") as `0x${string}`;
+export const AGENT_MARKET_ADDRESS = (process.env.AGENT_MARKET_ADDRESS || "0x2b24fB2D6FbD79AF6f81101e8Fb673c3194943A1") as `0x${string}`;
+
+export function toPythPrice(humanPrice: number, feedId: string): bigint {
+  const expo = PYTH_FEED_EXPONENTS[feedId] ?? -8;
+  const multiplier = 10 ** (-expo);
+  return BigInt(Math.round(humanPrice * multiplier));
+}
+
+export function fromPythPrice(rawPrice: bigint, feedId: string): number {
+  const expo = PYTH_FEED_EXPONENTS[feedId] ?? -8;
+  const multiplier = 10 ** (-expo);
+  return Number(rawPrice) / multiplier;
+}
 
 export function createAgentCard(name: string, agentId: number, image: string) {
   const card = {

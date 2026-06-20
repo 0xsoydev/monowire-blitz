@@ -24,6 +24,10 @@ interface Market {
   outcome: number;
   totalYes: bigint;
   totalNo: bigint;
+  priceFeedId: `0x${string}`;
+  targetPrice: bigint;
+  isAbove: boolean;
+  isPyth: boolean;
 }
 
 interface Agent {
@@ -150,14 +154,14 @@ export default function RentPage() {
       const agentData: Agent[] = [];
       for (const id of AGENT_IDS) {
         await sleep(id === AGENT_IDS[0] ? 0 : 150);
-        const score = await readWithRetry(() =>
+        const score = (await readWithRetry(() =>
           publicClient.readContract({
             address: AGENT_MARKET_ADDRESS,
             abi: AGENT_MARKET_ABI,
             functionName: "agentScore",
             args: [BigInt(id)],
           })
-        );
+        )) as bigint;
         await sleep(150);
         const owner = await readWithRetry(() =>
           publicClient
@@ -177,24 +181,24 @@ export default function RentPage() {
 
       // Load all markets
       await sleep(150);
-      const count = await readWithRetry(() =>
+      const count = (await readWithRetry(() =>
         publicClient.readContract({
           address: AGENT_MARKET_ADDRESS,
           abi: AGENT_MARKET_ABI,
           functionName: "marketCount",
         })
-      );
+      )) as bigint;
       const marketData: Market[] = [];
       for (let i = 0n; i < count; i++) {
         await sleep(150);
-        const info = await readWithRetry(() =>
+        const info = (await readWithRetry(() =>
           publicClient.readContract({
             address: AGENT_MARKET_ADDRESS,
             abi: AGENT_MARKET_ABI,
             functionName: "getMarketInfo",
             args: [i],
           })
-        );
+        )) as [string, bigint, `0x${string}`, `0x${string}`, boolean, number, bigint, bigint, `0x${string}`, bigint, boolean];
         marketData.push({
           id: i,
           question: info[0],
@@ -205,6 +209,10 @@ export default function RentPage() {
           outcome: info[5],
           totalYes: info[6],
           totalNo: info[7],
+          priceFeedId: info[8],
+          targetPrice: info[9],
+          isAbove: info[10],
+          isPyth: info[8] !== "0x0000000000000000000000000000000000000000000000000000000000000000",
         });
       }
       setMarkets(marketData);

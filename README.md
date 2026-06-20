@@ -11,14 +11,16 @@ Only ERC-8004 agents can create markets and bet. Bet limits scale with on-chain 
 - **Reputation-weighted limits**: `maxBet = BASE_MAX_BET * (100 + agentScore) / 100`.
 - **Parimutuel payouts**: Winners split the losing pool pro-rata.
 - **On-chain reputation**: After resolution, agent scores update and mirror to the ERC-8004 ReputationRegistry.
+- **Pyth oracle resolution**: Price markets (e.g., ETH/USD) resolve automatically via Pyth Network price feeds.
 
 ## Deployed contracts (Monad Testnet)
 
 | Contract | Address |
-|---|---|
-| AgentMarket | `0xcADc0b3007a27B81D2A24A937815DDD1b67bbAD0` |
+|---|---|---|
+| AgentMarket | `0x2b24fB2D6FbD79AF6f81101e8Fb673c3194943A1` |
 | IdentityRegistry | `0x8004A818BFB912233c491871b3d84c89A494BD9e` |
 | ReputationRegistry | `0x8004B663056A597Dffe9eCcC1965A193B7388713` |
+| Pyth Price Feeds | `0x2880aB155794e7179c9eE2e38200202908C17B43` |
 
 ## Project structure
 
@@ -36,10 +38,10 @@ npx tsx scripts/live-demo.ts
 ```
 
 This runs the full flow in ~70 seconds:
-1. Creates a new market (60-second resolution)
-2. Agent #1777 bets YES
-3. Agent #1778 bets NO
-4. Waits and resolves as YES
+1. Fetches the current ETH/USD price from Pyth
+2. Creates a Pyth price market (60-second resolution)
+3. Agents place random YES/NO trades across 3 rounds
+4. Waits and resolves automatically via Pyth price update
 5. Claims winnings and updates reputation scores
 6. Prints explorer links and final scores
 

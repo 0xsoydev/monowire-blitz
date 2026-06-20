@@ -6,6 +6,10 @@ import {
   AGENT_MARKET_ABI,
   IDENTITY_REGISTRY,
   IDENTITY_REGISTRY_ABI,
+  PYTH,
+  PYTH_FEED_ETH_USD,
+  toPythPrice,
+  fromPythPrice,
   getPrivateKey,
 } from "./config";
 
@@ -17,6 +21,8 @@ const OUTCOME_NO = 2;
 const TRADE_ROUNDS = 3;
 const MIN_BET = parseEther("0.001");
 const MAX_BET = parseEther("0.005");
+const PYTH_FEED_ID = PYTH_FEED_ETH_USD;
+const PYTH_HERMES = "https://hermes.pyth.network";
 
 const MARKET_EXPLORER = `https://monad-testnet.socialscan.io/address/${AGENT_MARKET_ADDRESS}`;
 
@@ -34,9 +40,9 @@ const walletClient = createWalletClient({
 });
 
 const GAS_LIMITS = {
-  createMarket: 500000n,
+  createMarket: 600000n,
   bet: 800000n,
-  resolveMarket: 300000n,
+  resolveMarket: 500000n,
   claimWinnings: 300000n,
   updateScores: 2000000n,
 };
@@ -61,13 +67,14 @@ async function checkBalance(): Promise<void> {
   const estimatedGasCost = totalGas * maxFeePerGas;
   const avgBetValue = (MIN_BET + MAX_BET) / 2n;
   const betValue = avgBetValue * totalBets;
-  const required = estimatedGasCost + betValue;
+  const pythFeeBuffer = parseEther("0.0001");
+  const required = estimatedGasCost + betValue + pythFeeBuffer;
   const buffer = (required * 11n) / 10n; // 1.1x buffer
 
   console.log(`\n💼 Wallet: ${account.address}`);
   console.log(`   Balance: ${formatEther(balance)} MON`);
   console.log(`   Estimated max gas cost: ${formatEther(estimatedGasCost)} MON`);
-  console.log(`   Bet value (2x): ${formatEther(betValue)} MON`);
+  console.log(`   Bet value (${Number(totalBets)} bets): ${formatEther(betValue)} MON`);
   console.log(`   Required (with 1.1x buffer): ${formatEther(buffer)} MON`);
 
   if (balance < buffer) {
@@ -117,23 +124,39 @@ function randomBetAmount(): bigint {
   return parseEther(value.toFixed(6));
 }
 
+async function fetchPythUpdate(feedId: string): Promise<{ updateData: `0x${string}`[]; price: number }> {
+  const url = `${PYTH_HERMES}/v2/updates/price/latest?ids[]=${feedId}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Pyth Hermes failed: ${res.status}`);
+  const json = await res.json();
+  const updateData: `0x${string}`[] = json.binary.data.map((d: string) => `0x${d}` as `0x${string}`);
+  const parsed = json.parsed[0];
+  const price = fromPythPrice(BigInt(parsed.price.price), feedId);
+  return { updateData, price };
+}
+
 function randomOutcome(): number {
   return Math.random() > 0.5 ? OUTCOME_YES : OUTCOME_NO;
 }
 
 async function createMarket(): Promise<bigint> {
-  const question = "Will an AI agent win a major crypto hackathon before 2027?";
+  const { price } = await fetchPythUpdate(PYTH_FEED_ID);
+  const humanPrice = Math.round(price * 100) / 100;
+  // target is current price; outcome depends on which side price moves before resolution
+  const targetPrice = toPythPrice(price, PYTH_FEED_ID);
+  const question = `Will ETH/USD be above $${humanPrice.toFixed(2)} at resolution?`;
   const resolutionTime = BigInt(Math.floor(Date.now() / 1000) + RESOLUTION_SECONDS);
 
   console.log(`\n🎯 Creating market: "${question}"`);
+  console.log(`   Current ETH/USD: $${humanPrice.toFixed(2)}`);
   console.log(`   Resolution in ${RESOLUTION_SECONDS} seconds`);
 
   const tx = await walletClient.writeContract({
     address: AGENT_MARKET_ADDRESS,
     abi: AGENT_MARKET_ABI,
-    functionName: "createMarket",
-    args: [question, resolutionTime, account.address],
-    gas: 500000n,
+    functionName: "createMarketWithPyth",
+    args: [question, resolutionTime, PYTH_FEED_ID, targetPrice, true],
+    gas: 600000n,
   });
 
   const receipt = await publicClient.waitForTransactionReceipt({ hash: tx });
@@ -222,18 +245,52 @@ async function waitForResolution(marketId: bigint) {
   }
 }
 
-async function resolveMarket(marketId: bigint, outcome: number) {
-  const outcomeLabel = outcome === OUTCOME_YES ? "YES" : "NO";
-  console.log(`\n🏁 Resolving market as ${outcomeLabel}...`);
+async function resolveMarketWithPyth(marketId: bigint) {
+  console.log(`\n🏁 Fetching Pyth price update and resolving market...`);
+  const { updateData, price } = await fetchPythUpdate(PYTH_FEED_ID);
+  const humanPrice = Math.round(price * 100) / 100;
+  console.log(`   ETH/USD at resolution: $${humanPrice.toFixed(2)}`);
+
+  const fee = await publicClient.readContract({
+    address: PYTH,
+    abi: [
+      {
+        type: "function",
+        name: "getUpdateFee",
+        inputs: [{ type: "bytes[]", name: "updateData" }],
+        outputs: [{ type: "uint256", name: "feeAmount" }],
+        stateMutability: "view",
+      },
+    ],
+    functionName: "getUpdateFee",
+    args: [updateData],
+  });
+
+  console.log(`   Pyth update fee: ${formatEther(fee)} MON`);
+
   const tx = await walletClient.writeContract({
     address: AGENT_MARKET_ADDRESS,
     abi: AGENT_MARKET_ABI,
-    functionName: "resolveMarket",
-    args: [marketId, outcome],
-    gas: 300000n,
+    functionName: "resolveMarketWithPyth",
+    args: [marketId, updateData],
+    value: fee,
+    gas: 500000n,
   });
+
   const receipt = await publicClient.waitForTransactionReceipt({ hash: tx });
-  console.log(`✅ Market resolved`);
+
+  const marketInfo = await readWithRetry(() =>
+    publicClient.readContract({
+      address: AGENT_MARKET_ADDRESS,
+      abi: AGENT_MARKET_ABI,
+      functionName: "getMarketInfo",
+      args: [marketId],
+    })
+  );
+  const outcome = marketInfo[5];
+  const outcomeLabel = outcome === OUTCOME_YES ? "YES" : "NO";
+
+  console.log(`✅ Market resolved as ${outcomeLabel}`);
   console.log(`   Tx: ${formatExplorerTx(receipt.transactionHash)}`);
 }
 
@@ -307,8 +364,7 @@ async function main() {
   }
 
   await waitForResolution(marketId);
-  const outcome = randomOutcome();
-  await resolveMarket(marketId, outcome);
+  await resolveMarketWithPyth(marketId);
   await claimWinnings(marketId);
   await updateScores(marketId);
   await printSummary();

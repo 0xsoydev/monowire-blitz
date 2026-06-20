@@ -25,6 +25,10 @@ interface Market {
   outcome: number;
   totalYes: bigint;
   totalNo: bigint;
+  priceFeedId: `0x${string}`;
+  targetPrice: bigint;
+  isAbove: boolean;
+  isPyth: boolean;
 }
 
 interface Agent {
@@ -81,13 +85,13 @@ export default function Home() {
 
   const load = useCallback(async () => {
     try {
-      const count = await readWithRetry(() =>
+      const count = (await readWithRetry(() =>
         publicClient.readContract({
           address: AGENT_MARKET_ADDRESS,
           abi: AGENT_MARKET_ABI,
           functionName: "marketCount",
         })
-      );
+      )) as bigint;
       setMarketCount(count);
 
       let latestMarket: Market | null = null;
@@ -97,14 +101,14 @@ export default function Home() {
 
         for (let i = 0n; i < count; i++) {
           await sleep(150);
-          const info = await readWithRetry(() =>
+          const info = (await readWithRetry(() =>
             publicClient.readContract({
               address: AGENT_MARKET_ADDRESS,
               abi: AGENT_MARKET_ABI,
               functionName: "getMarketInfo",
               args: [i],
             })
-          );
+          )) as [string, bigint, `0x${string}`, `0x${string}`, boolean, number, bigint, bigint, `0x${string}`, bigint, boolean];
           const m = {
             id: i,
             question: info[0],
@@ -115,6 +119,10 @@ export default function Home() {
             outcome: info[5],
             totalYes: info[6],
             totalNo: info[7],
+            priceFeedId: info[8],
+            targetPrice: info[9],
+            isAbove: info[10],
+            isPyth: info[8] !== "0x0000000000000000000000000000000000000000000000000000000000000000",
           };
           marketData.push(m);
           if (i === latestId) latestMarket = m;
@@ -123,14 +131,14 @@ export default function Home() {
         const agentData: Agent[] = [];
         for (const id of AGENT_IDS) {
           await sleep(150);
-          const score = await readWithRetry(() =>
+          const score = (await readWithRetry(() =>
             publicClient.readContract({
               address: AGENT_MARKET_ADDRESS,
               abi: AGENT_MARKET_ABI,
               functionName: "agentScore",
               args: [BigInt(id)],
             })
-          );
+          )) as bigint;
           await sleep(150);
           const owner = await readWithRetry(() =>
             publicClient

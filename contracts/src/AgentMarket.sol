@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import "./PythOracle.sol";
 
 interface IReputationRegistry {
     function giveFeedback(
@@ -20,10 +21,12 @@ interface IReputationRegistry {
 contract AgentMarket is Ownable {
     IERC721 public immutable identityRegistry;
     IReputationRegistry public immutable reputationRegistry;
+    IPyth public immutable pyth;
 
     uint256 public constant BASE_MAX_BET = 0.05 ether;
     int256 public constant SCORE_WIN = 10;
     int256 public constant SCORE_LOSS = -5;
+    uint256 public constant PYTH_MAX_PRICE_AGE = 10 minutes;
 
     struct Market {
         string question;
@@ -34,6 +37,9 @@ contract AgentMarket is Ownable {
         uint8 outcome; // 0 = open, 1 = yes, 2 = no
         uint256 totalYes;
         uint256 totalNo;
+        bytes32 priceFeedId; // Pyth feed ID; bytes32(0) means manual oracle
+        int64 targetPrice;   // raw Pyth price value to compare against
+        bool isAbove;        // YES if price >= targetPrice
         mapping(address => uint256) yesBets;
         mapping(address => uint256) noBets;
         mapping(address => bool) claimed;
@@ -53,7 +59,10 @@ contract AgentMarket is Ownable {
         string question,
         address indexed creator,
         address indexed oracle,
-        uint256 resolutionTime
+        uint256 resolutionTime,
+        bytes32 priceFeedId,
+        int64 targetPrice,
+        bool isAbove
     );
     event BetPlaced(
         uint256 indexed marketId,
@@ -67,9 +76,14 @@ contract AgentMarket is Ownable {
     event WinningsClaimed(uint256 indexed marketId, address indexed user, uint256 amount);
     event AgentScoreUpdated(uint256 indexed agentId, int256 newScore, bool correct);
 
-    constructor(address _identityRegistry, address _reputationRegistry) Ownable(msg.sender) {
+    constructor(
+        address _identityRegistry,
+        address _reputationRegistry,
+        address _pyth
+    ) Ownable(msg.sender) {
         identityRegistry = IERC721(_identityRegistry);
         reputationRegistry = IReputationRegistry(_reputationRegistry);
+        pyth = IPyth(_pyth);
     }
 
     function createMarket(
@@ -88,7 +102,40 @@ contract AgentMarket is Ownable {
         m.creator = msg.sender;
         m.oracle = oracle;
 
-        emit MarketCreated(marketId, question, msg.sender, oracle, resolutionTime);
+        emit MarketCreated(marketId, question, msg.sender, oracle, resolutionTime, bytes32(0), 0, false);
+    }
+
+    function createMarketWithPyth(
+        string calldata question,
+        uint256 resolutionTime,
+        bytes32 priceFeedId,
+        int64 targetPrice,
+        bool isAbove
+    ) external returns (uint256 marketId) {
+        require(identityRegistry.balanceOf(msg.sender) > 0, "Only agents can create markets");
+        require(resolutionTime > block.timestamp, "Resolution time must be future");
+        require(priceFeedId != bytes32(0), "Invalid price feed");
+
+        marketId = marketCount++;
+        Market storage m = markets[marketId];
+        m.question = question;
+        m.resolutionTime = resolutionTime;
+        m.creator = msg.sender;
+        m.oracle = address(pyth);
+        m.priceFeedId = priceFeedId;
+        m.targetPrice = targetPrice;
+        m.isAbove = isAbove;
+
+        emit MarketCreated(
+            marketId,
+            question,
+            msg.sender,
+            address(pyth),
+            resolutionTime,
+            priceFeedId,
+            targetPrice,
+            isAbove
+        );
     }
 
     function bet(uint256 marketId, uint256 agentId, bool isYes) external payable {
@@ -123,9 +170,37 @@ contract AgentMarket is Ownable {
         require(block.timestamp >= m.resolutionTime, "Too early");
         require(!m.resolved, "Already resolved");
         require(outcome == 1 || outcome == 2, "Invalid outcome");
+        require(m.priceFeedId == bytes32(0), "Use resolveMarketWithPyth");
 
         m.resolved = true;
         m.outcome = outcome;
+
+        emit MarketResolved(marketId, outcome);
+    }
+
+    function resolveMarketWithPyth(uint256 marketId, bytes[] calldata priceUpdateData) external payable {
+        Market storage m = markets[marketId];
+        require(block.timestamp >= m.resolutionTime, "Too early");
+        require(!m.resolved, "Already resolved");
+        require(m.priceFeedId != bytes32(0), "Not a Pyth market");
+
+        uint256 fee = pyth.getUpdateFee(priceUpdateData);
+        require(msg.value >= fee, "Insufficient Pyth update fee");
+        pyth.updatePriceFeeds{value: fee}(priceUpdateData);
+
+        PythStructs.Price memory price = pyth.getPriceNoOlderThan(m.priceFeedId, PYTH_MAX_PRICE_AGE);
+
+        bool conditionMet = m.isAbove ? price.price >= m.targetPrice : price.price < m.targetPrice;
+        uint8 outcome = conditionMet ? 1 : 2;
+
+        m.resolved = true;
+        m.outcome = outcome;
+
+        // Refund excess fee
+        if (msg.value > fee) {
+            (bool success, ) = payable(msg.sender).call{value: msg.value - fee}("");
+            require(success, "Refund failed");
+        }
 
         emit MarketResolved(marketId, outcome);
     }
@@ -220,7 +295,10 @@ contract AgentMarket is Ownable {
             bool resolved,
             uint8 outcome,
             uint256 totalYes,
-            uint256 totalNo
+            uint256 totalNo,
+            bytes32 priceFeedId,
+            int64 targetPrice,
+            bool isAbove
         )
     {
         Market storage m = markets[marketId];
@@ -232,7 +310,10 @@ contract AgentMarket is Ownable {
             m.resolved,
             m.outcome,
             m.totalYes,
-            m.totalNo
+            m.totalNo,
+            m.priceFeedId,
+            m.targetPrice,
+            m.isAbove
         );
     }
 
