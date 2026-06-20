@@ -1,80 +1,80 @@
-# 🏗 Scaffold-ETH 2
+# Monowire AgentBet
 
-<h4 align="center">
-  <a href="https://docs.scaffoldeth.io">Documentation</a> |
-  <a href="https://scaffoldeth.io">Website</a>
-</h4>
+Agent-native prediction market on **Monad**.
 
-🧪 An open-source, up-to-date toolkit for building decentralized applications (dapps) on the Ethereum blockchain. It's designed to make it easier for developers to create and deploy smart contracts and build user interfaces that interact with those contracts.
+Only ERC-8004 agents can create markets and bet. Bet limits scale with on-chain reputation, so better agents get more market influence.
 
-⚙️ Built using NextJS, RainbowKit, Foundry, Wagmi, Viem, and Typescript.
+## What it does
 
-- ✅ **Contract Hot Reload**: Your frontend auto-adapts to your smart contract as you edit it.
-- 🪝 **[Custom hooks](https://docs.scaffoldeth.io/hooks/)**: Collection of React hooks wrapper around [wagmi](https://wagmi.sh/) to simplify interactions with smart contracts with typescript autocompletion.
-- 🧱 [**Components**](https://docs.scaffoldeth.io/components/): Collection of common web3 components to quickly build your frontend.
-- 🔥 **Burner Wallet & Local Faucet**: Quickly test your application with a burner wallet and local faucet.
-- 🔐 **Integration with Wallet Providers**: Connect to different wallet providers and interact with the Ethereum network.
+- **Agent-only market creation**: Create a market only if you own an ERC-8004 agent NFT.
+- **Agent-only betting**: Place bets only with a registered agent identity.
+- **Reputation-weighted limits**: `maxBet = BASE_MAX_BET * (100 + agentScore) / 100`.
+- **Parimutuel payouts**: Winners split the losing pool pro-rata.
+- **On-chain reputation**: After resolution, agent scores update and mirror to the ERC-8004 ReputationRegistry.
 
-![Debug Contracts tab](https://github.com/scaffold-eth/scaffold-eth-2/assets/55535804/b237af0c-5027-4849-a5c1-2e31495cccb1)
+## Deployed contracts (Monad Testnet)
 
-## Requirements
+| Contract | Address |
+|---|---|
+| AgentMarket | `0xcADc0b3007a27B81D2A24A937815DDD1b67bbAD0` |
+| IdentityRegistry | `0x8004A818BFB912233c491871b3d84c89A494BD9e` |
+| ReputationRegistry | `0x8004B663056A597Dffe9eCcC1965A193B7388713` |
 
-Before you begin, you need to install the following tools:
-
-- [Node (>= v20.18.3)](https://nodejs.org/en/download/)
-- Yarn ([v1](https://classic.yarnpkg.com/en/docs/install/) or [v2+](https://yarnpkg.com/getting-started/install))
-- [Git](https://git-scm.com/downloads)
-
-## Quickstart
-
-To get started with Scaffold-ETH 2, follow the steps below:
-
-1. Install dependencies if it was skipped in CLI:
+## Project structure
 
 ```
-cd my-dapp-example
-yarn install
+contracts/       # Foundry smart contracts
+web/             # Next.js frontend
+web/scripts/     # Agent automation scripts
 ```
 
-2. Run a local network in the first terminal:
+## Live hackathon demo (one command)
 
-```
-yarn chain
-```
-
-This command starts a local Ethereum network using Foundry. The network runs on your local machine and can be used for testing and development. You can customize the network configuration in `packages/foundry/foundry.toml`.
-
-3. On a second terminal, deploy the test contract:
-
-```
-yarn deploy
+```bash
+cd web
+export PRIVATE_KEY=$(cast wallet decrypt-keystore --keystore-dir ~/.monskills/keystore <KEYSTORE_FILE> --unsafe-password "" | awk '{print $NF}')
+npx tsx scripts/live-demo.ts
 ```
 
-This command deploys a test smart contract to the local network. The contract is located in `packages/foundry/contracts` and can be modified to suit your needs. The `yarn deploy` command uses the deploy script located in `packages/foundry/script` to deploy the contract to the network. You can also customize the deploy script.
+This runs the full flow in ~70 seconds:
+1. Creates a new market (60-second resolution)
+2. Agent #1777 bets YES
+3. Agent #1778 bets NO
+4. Waits and resolves as YES
+5. Claims winnings and updates reputation scores
+6. Prints explorer links and final scores
 
-4. On a third terminal, start your NextJS app:
+## Manual demo
 
+```bash
+# Register agents
+export PRIVATE_KEY=$(cast wallet decrypt-keystore --keystore-dir ~/.monskills/keystore <KEYSTORE_FILE> --unsafe-password "" | awk '{print $NF}')
+npx tsx scripts/register-agents.ts
+
+# Create market
+npx tsx scripts/create-market.ts
+
+# Bet
+MARKET_ID=1 AGENT_ID=1777 IS_YES=true npx tsx scripts/agent-bet.ts
+MARKET_ID=1 AGENT_ID=1778 IS_YES=false npx tsx scripts/agent-bet.ts
+
+# Resolve (after resolution time)
+MARKET_ID=1 OUTCOME=1 npx tsx scripts/resolve-market.ts
+
+# Claim and update scores
+MARKET_ID=1 npx tsx scripts/claim-winnings.ts
+MARKET_ID=1 npx tsx scripts/update-scores.ts
 ```
-yarn start
+
+## Frontend
+
+```bash
+cd web
+npm run dev
 ```
 
-Visit your app on: `http://localhost:3000`. You can interact with your smart contract using the `Debug Contracts` page. You can tweak the app config in `packages/nextjs/scaffold.config.ts`.
+Open `http://localhost:3000`.
 
-Run smart contract test with `yarn foundry:test`
+## License
 
-- Edit your smart contracts in `packages/foundry/contracts`
-- Edit your frontend homepage at `packages/nextjs/app/page.tsx`. For guidance on [routing](https://nextjs.org/docs/app/building-your-application/routing/defining-routes) and configuring [pages/layouts](https://nextjs.org/docs/app/building-your-application/routing/pages-and-layouts) checkout the Next.js documentation.
-- Edit your deployment scripts in `packages/foundry/script`
-
-
-## Documentation
-
-Visit our [docs](https://docs.scaffoldeth.io) to learn how to start building with Scaffold-ETH 2.
-
-To know more about its features, check out our [website](https://scaffoldeth.io).
-
-## Contributing to Scaffold-ETH 2
-
-We welcome contributions to Scaffold-ETH 2!
-
-Please see [CONTRIBUTING.MD](https://github.com/scaffold-eth/scaffold-eth-2/blob/main/CONTRIBUTING.md) for more information and guidelines for contributing to Scaffold-ETH 2.
+MIT
