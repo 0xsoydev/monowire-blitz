@@ -63,7 +63,7 @@ async function readWithRetry<T>(fn: () => Promise<T>, retries = 5): Promise<T> {
 }
 
 const neoCard = "border-4 border-black bg-[#141414] shadow-[6px_6px_0px_0px_#000]";
-const neoButton = "border-4 border-black bg-violet-400 hover:bg-violet-300 text-black font-black shadow-[4px_4px_0px_0px_#fff] hover:shadow-[2px_2px_0px_0px_#fff] hover:translate-x-[2px] hover:translate-y-[2px] transition-all";
+const neoButton = "border-4 border-black bg-violet-400 hover:bg-violet-300 text-black font-black shadow-[4px_4px_0px_0px_#000] hover:shadow-[2px_2px_0px_0px_#000] hover:translate-x-[2px] hover:translate-y-[2px] transition-all";
 const neoBadge = (color: string) => `border-4 border-black px-3 py-1 font-black text-xs shadow-[3px_3px_0px_0px_#000] uppercase ${color}`;
 
 const agentAccent = ["bg-pink-400", "bg-cyan-400", "bg-lime-400"];
@@ -207,7 +207,7 @@ export default function Home() {
             </div>
             <button
               disabled
-              className="border-4 border-black bg-violet-400 px-4 py-2 text-sm font-black text-black shadow-[4px_4px_0px_0px_#fff] opacity-80 cursor-not-allowed"
+              className="border-4 border-black bg-violet-400 px-4 py-2 text-sm font-black text-black shadow-[4px_4px_0px_0px_#000] opacity-80 cursor-not-allowed"
               title="Create market via the live demo script"
             >
               + NEW MARKET
