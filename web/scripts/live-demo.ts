@@ -37,12 +37,30 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function readWithRetry<T>(fn: () => Promise<T>, retries = 5): Promise<T> {
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      const isRateLimit = err?.message?.includes("requests limited") || err?.details?.includes("requests limited");
+      if (isRateLimit && i < retries - 1) {
+        const delay = 500 * (i + 1);
+        console.log(`   ⏳ Rate limited, retrying in ${delay}ms...`);
+        await sleep(delay);
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error("readWithRetry exhausted retries");
+}
+
 function formatExplorerTx(hash: string) {
   return `https://monad-testnet.socialscan.io/tx/${hash}`;
 }
 
 async function createMarket(): Promise<bigint> {
-  const question = "Will the next Monad testnet block number be even?";
+  const question = "Will an AI agent win a major crypto hackathon before 2027?";
   const resolutionTime = BigInt(Math.floor(Date.now() / 1000) + RESOLUTION_SECONDS);
 
   console.log(`\n🎯 Creating market: "${question}"`);
@@ -57,11 +75,14 @@ async function createMarket(): Promise<bigint> {
   });
 
   const receipt = await publicClient.waitForTransactionReceipt({ hash: tx });
-  const marketCount = await publicClient.readContract({
-    address: AGENT_MARKET_ADDRESS,
-    abi: AGENT_MARKET_ABI,
-    functionName: "marketCount",
-  });
+  await sleep(200);
+  const marketCount = await readWithRetry(() =>
+    publicClient.readContract({
+      address: AGENT_MARKET_ADDRESS,
+      abi: AGENT_MARKET_ABI,
+      functionName: "marketCount",
+    })
+  );
   const marketId = marketCount - 1n;
 
   console.log(`✅ Market created`);
@@ -72,12 +93,15 @@ async function createMarket(): Promise<bigint> {
 }
 
 async function placeBet(marketId: bigint, agentId: bigint, isYes: boolean, label: string) {
-  const maxBet = await publicClient.readContract({
-    address: AGENT_MARKET_ADDRESS,
-    abi: AGENT_MARKET_ABI,
-    functionName: "getMaxBet",
-    args: [agentId],
-  });
+  await sleep(200);
+  const maxBet = await readWithRetry(() =>
+    publicClient.readContract({
+      address: AGENT_MARKET_ADDRESS,
+      abi: AGENT_MARKET_ABI,
+      functionName: "getMaxBet",
+      args: [agentId],
+    })
+  );
 
   console.log(`\n🤖 Agent #${agentId} (${label})`);
   console.log(`   Max bet: ${formatEther(maxBet)} MON`);
@@ -102,12 +126,15 @@ async function placeBet(marketId: bigint, agentId: bigint, isYes: boolean, label
 }
 
 async function waitForResolution(marketId: bigint) {
-  const marketInfo = await publicClient.readContract({
-    address: AGENT_MARKET_ADDRESS,
-    abi: AGENT_MARKET_ABI,
-    functionName: "getMarketInfo",
-    args: [marketId],
-  });
+  await sleep(200);
+  const marketInfo = await readWithRetry(() =>
+    publicClient.readContract({
+      address: AGENT_MARKET_ADDRESS,
+      abi: AGENT_MARKET_ABI,
+      functionName: "getMarketInfo",
+      args: [marketId],
+    })
+  );
   const resolutionTime = Number(marketInfo[1]);
   const now = Math.floor(Date.now() / 1000);
   const waitSeconds = Math.max(0, resolutionTime - now + 3); // 3s buffer
@@ -167,18 +194,24 @@ async function updateScores(marketId: bigint) {
 async function printSummary() {
   console.log(`\n🏆 Final Agent Scores`);
   for (const agentId of [AGENT_YES, AGENT_NO, 1779n]) {
-    const score = await publicClient.readContract({
-      address: AGENT_MARKET_ADDRESS,
-      abi: AGENT_MARKET_ABI,
-      functionName: "agentScore",
-      args: [agentId],
-    });
-    const owner = await publicClient.readContract({
-      address: IDENTITY_REGISTRY,
-      abi: IDENTITY_REGISTRY_ABI,
-      functionName: "ownerOf",
-      args: [agentId],
-    }).catch(() => "unknown");
+    await sleep(300);
+    const score = await readWithRetry(() =>
+      publicClient.readContract({
+        address: AGENT_MARKET_ADDRESS,
+        abi: AGENT_MARKET_ABI,
+        functionName: "agentScore",
+        args: [agentId],
+      })
+    );
+    await sleep(300);
+    const owner = await readWithRetry(() =>
+      publicClient.readContract({
+        address: IDENTITY_REGISTRY,
+        abi: IDENTITY_REGISTRY_ABI,
+        functionName: "ownerOf",
+        args: [agentId],
+      }).catch(() => "unknown")
+    );
     console.log(`   Agent #${agentId}: ${score.toString()} (owner: ${owner})`);
   }
 
