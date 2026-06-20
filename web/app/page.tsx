@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { formatEther } from "viem";
+import { multicall } from "viem/actions";
 import {
   publicClient,
   AGENT_MARKET_ADDRESS,
@@ -11,6 +12,8 @@ import {
 } from "@/lib/contracts";
 
 const AGENT_IDS = [1777, 1778, 1779];
+const POLL_INTERVAL_MS = 15_000;
+const RPC_RETRY_DELAY_MS = 800;
 
 interface Market {
   id: bigint;
@@ -38,6 +41,28 @@ const formatMON = (wei: bigint) => {
   return `${n.toFixed(n < 0.001 ? 6 : 4)} MON`;
 };
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const isRateLimitError = (err: any) =>
+  err?.message?.includes("requests limited") ||
+  err?.details?.includes("requests limited") ||
+  err?.shortMessage?.includes("requests limited");
+
+async function readWithRetry<T>(fn: () => Promise<T>, retries = 5): Promise<T> {
+  for (let i = 0; i < retries; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (isRateLimitError(err) && i < retries - 1) {
+        await sleep(RPC_RETRY_DELAY_MS * (i + 1));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error("RPC retry exhausted");
+}
+
 const neoCard = "border-4 border-black bg-zinc-100 dark:bg-zinc-900 shadow-[6px_6px_0px_0px_#000]";
 const neoButton = "border-4 border-black bg-yellow-400 hover:bg-yellow-300 text-black font-black shadow-[4px_4px_0px_0px_#000] hover:shadow-[2px_2px_0px_0px_#000] hover:translate-x-[2px] hover:translate-y-[2px] transition-all";
 const neoBadge = (color: string) => `border-4 border-black px-3 py-1 font-black text-sm shadow-[3px_3px_0px_0px_#000] ${color}`;
@@ -58,59 +83,95 @@ export default function Home() {
 
   const load = useCallback(async () => {
     try {
-      const count = await publicClient.readContract({
-        address: AGENT_MARKET_ADDRESS,
-        abi: AGENT_MARKET_ABI,
-        functionName: "marketCount",
-      });
+      const count = await readWithRetry(() =>
+        publicClient.readContract({
+          address: AGENT_MARKET_ADDRESS,
+          abi: AGENT_MARKET_ABI,
+          functionName: "marketCount",
+        })
+      );
       setMarketCount(count);
 
       let latestMarket: Market | null = null;
       if (count > 0n) {
         const latestId = count - 1n;
-        const info = await publicClient.readContract({
-          address: AGENT_MARKET_ADDRESS,
+        await sleep(100);
+
+        const agentScoreContracts = AGENT_IDS.map((id) => ({
+          address: AGENT_MARKET_ADDRESS as `0x${string}`,
           abi: AGENT_MARKET_ABI,
-          functionName: "getMarketInfo",
-          args: [latestId],
-        });
-        latestMarket = {
-          id: latestId,
-          question: info[0],
-          resolutionTime: info[1],
-          creator: info[2],
-          oracle: info[3],
-          resolved: info[4],
-          outcome: info[5],
-          totalYes: info[6],
-          totalNo: info[7],
-        };
+          functionName: "agentScore" as const,
+          args: [BigInt(id)],
+        }));
+
+        const ownerContracts = AGENT_IDS.map((id) => ({
+          address: IDENTITY_REGISTRY as `0x${string}`,
+          abi: IDENTITY_REGISTRY_ABI,
+          functionName: "ownerOf" as const,
+          args: [BigInt(id)],
+        }));
+
+        const contracts = [
+          {
+            address: AGENT_MARKET_ADDRESS as `0x${string}`,
+            abi: AGENT_MARKET_ABI,
+            functionName: "getMarketInfo" as const,
+            args: [latestId],
+          },
+          ...agentScoreContracts,
+          ...ownerContracts,
+        ] as any;
+
+        const results = await readWithRetry(() =>
+          multicall(publicClient, {
+            allowFailure: true,
+            contracts,
+          })
+        );
+
+        const [infoResult, ...rest] = results;
+        if (infoResult.status === "success") {
+          const info = infoResult.result as [
+            string,
+            bigint,
+            string,
+            string,
+            boolean,
+            number,
+            bigint,
+            bigint,
+          ];
+          latestMarket = {
+            id: latestId,
+            question: info[0],
+            resolutionTime: info[1],
+            creator: info[2],
+            oracle: info[3],
+            resolved: info[4],
+            outcome: info[5],
+            totalYes: info[6],
+            totalNo: info[7],
+          };
+        }
+
+        const agentData: Agent[] = [];
+        for (let i = 0; i < AGENT_IDS.length; i++) {
+          const scoreResult = rest[i];
+          const ownerResult = rest[AGENT_IDS.length + i];
+          agentData.push({
+            id: AGENT_IDS[i],
+            owner: ownerResult.status === "success" ? (ownerResult.result as string) : "0x",
+            score: scoreResult.status === "success" ? (scoreResult.result as bigint) : 0n,
+          });
+        }
+        setAgents(agentData);
+      } else {
+        setAgents(AGENT_IDS.map((id) => ({ id, owner: "0x", score: 0n })));
       }
       setMarket(latestMarket);
 
-      const agentData: Agent[] = [];
-      for (const id of AGENT_IDS) {
-        const [score, owner] = await Promise.all([
-          publicClient.readContract({
-            address: AGENT_MARKET_ADDRESS,
-            abi: AGENT_MARKET_ABI,
-            functionName: "agentScore",
-            args: [BigInt(id)],
-          }),
-          publicClient
-            .readContract({
-              address: IDENTITY_REGISTRY,
-              abi: IDENTITY_REGISTRY_ABI,
-              functionName: "ownerOf",
-              args: [BigInt(id)],
-            })
-            .catch(() => "0x"),
-        ]);
-        agentData.push({ id, owner, score });
-      }
-      setAgents(agentData);
-
-      const block = await publicClient.getBlockNumber();
+      await sleep(100);
+      const block = await readWithRetry(() => publicClient.getBlockNumber());
       setBlockNumber(block);
       setError(null);
     } catch (err) {
@@ -122,7 +183,7 @@ export default function Home() {
 
   useEffect(() => {
     load();
-    const interval = setInterval(load, 10000);
+    const interval = setInterval(load, POLL_INTERVAL_MS);
     return () => clearInterval(interval);
   }, [load]);
 
