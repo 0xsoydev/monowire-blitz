@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { formatEther } from "viem";
+import Link from "next/link";
 import {
   publicClient,
   AGENT_MARKET_ADDRESS,
@@ -205,6 +206,12 @@ export default function Home() {
                 {blockNumber !== null ? `BLOCK ${blockNumber.toString()}` : "LOADING"}
               </span>
             </div>
+            <Link
+              href="/rent"
+              className="border-4 border-black bg-pink-400 px-4 py-2 text-sm font-black text-black shadow-[4px_4px_0px_0px_#000] hover:shadow-[2px_2px_0px_0px_#000] hover:translate-x-[2px] hover:translate-y-[2px] transition-all"
+            >
+              RENT AGENT
+            </Link>
             <button
               disabled
               className="border-4 border-black bg-violet-400 px-4 py-2 text-sm font-black text-black shadow-[4px_4px_0px_0px_#000] opacity-80 cursor-not-allowed"
