@@ -9,11 +9,14 @@ import {
   getPrivateKey,
 } from "./config";
 
-const AGENT_YES = 1777n;
-const AGENT_NO = 1778n;
-const BET_AMOUNT = parseEther("0.01");
+const AGENT_A = 1777n;
+const AGENT_B = 1778n;
 const RESOLUTION_SECONDS = 60;
 const OUTCOME_YES = 1;
+const OUTCOME_NO = 2;
+const TRADE_ROUNDS = 3;
+const MIN_BET = parseEther("0.001");
+const MAX_BET = parseEther("0.005");
 
 const MARKET_EXPLORER = `https://monad-testnet.socialscan.io/address/${AGENT_MARKET_ADDRESS}`;
 
@@ -46,24 +49,26 @@ async function checkBalance(): Promise<void> {
     publicClient.estimateFeesPerGas().catch(() => null),
   ]);
 
+  const totalBets = BigInt(TRADE_ROUNDS * 2);
   const totalGas =
     GAS_LIMITS.createMarket +
-    GAS_LIMITS.bet * 2n +
+    GAS_LIMITS.bet * totalBets +
     GAS_LIMITS.resolveMarket +
     GAS_LIMITS.claimWinnings +
     GAS_LIMITS.updateScores;
 
   const maxFeePerGas = fees?.maxFeePerGas ?? parseEther("0.00000018"); // fallback ~180 gwei
   const estimatedGasCost = totalGas * maxFeePerGas;
-  const betValue = BET_AMOUNT * 2n;
+  const avgBetValue = (MIN_BET + MAX_BET) / 2n;
+  const betValue = avgBetValue * totalBets;
   const required = estimatedGasCost + betValue;
-  const buffer = (required * 15n) / 10n; // 1.5x buffer
+  const buffer = (required * 11n) / 10n; // 1.1x buffer
 
   console.log(`\n💼 Wallet: ${account.address}`);
   console.log(`   Balance: ${formatEther(balance)} MON`);
   console.log(`   Estimated max gas cost: ${formatEther(estimatedGasCost)} MON`);
   console.log(`   Bet value (2x): ${formatEther(betValue)} MON`);
-  console.log(`   Required (with 1.5x buffer): ${formatEther(buffer)} MON`);
+  console.log(`   Required (with 1.1x buffer): ${formatEther(buffer)} MON`);
 
   if (balance < buffer) {
     console.log(`\n❌ Insufficient balance to run the full demo.`);
@@ -101,6 +106,21 @@ function formatExplorerTx(hash: string) {
   return `https://monad-testnet.socialscan.io/tx/${hash}`;
 }
 
+function randomBool(): boolean {
+  return Math.random() > 0.5;
+}
+
+function randomBetAmount(): bigint {
+  const min = Number(formatEther(MIN_BET));
+  const max = Number(formatEther(MAX_BET));
+  const value = min + Math.random() * (max - min);
+  return parseEther(value.toFixed(6));
+}
+
+function randomOutcome(): number {
+  return Math.random() > 0.5 ? OUTCOME_YES : OUTCOME_NO;
+}
+
 async function createMarket(): Promise<bigint> {
   const question = "Will an AI agent win a major crypto hackathon before 2027?";
   const resolutionTime = BigInt(Math.floor(Date.now() / 1000) + RESOLUTION_SECONDS);
@@ -134,7 +154,7 @@ async function createMarket(): Promise<bigint> {
   return marketId;
 }
 
-async function placeBet(marketId: bigint, agentId: bigint, isYes: boolean, label: string) {
+async function placeBet(marketId: bigint, agentId: bigint, isYes: boolean, amount: bigint) {
   await sleep(200);
   const maxBet = await readWithRetry(() =>
     publicClient.readContract({
@@ -145,12 +165,13 @@ async function placeBet(marketId: bigint, agentId: bigint, isYes: boolean, label
     })
   );
 
-  console.log(`\n🤖 Agent #${agentId} (${label})`);
+  const label = isYes ? "YES" : "NO";
+  console.log(`\n🤖 Agent #${agentId}`);
   console.log(`   Max bet: ${formatEther(maxBet)} MON`);
-  console.log(`   Betting: ${formatEther(BET_AMOUNT)} MON on ${isYes ? "YES" : "NO"}`);
+  console.log(`   Betting: ${formatEther(amount)} MON on ${label}`);
 
-  if (BET_AMOUNT > maxBet) {
-    throw new Error(`Bet amount ${formatEther(BET_AMOUNT)} exceeds max bet ${formatEther(maxBet)}`);
+  if (amount > maxBet) {
+    throw new Error(`Bet amount ${formatEther(amount)} exceeds max bet ${formatEther(maxBet)}`);
   }
 
   const tx = await walletClient.writeContract({
@@ -158,13 +179,23 @@ async function placeBet(marketId: bigint, agentId: bigint, isYes: boolean, label
     abi: AGENT_MARKET_ABI,
     functionName: "bet",
     args: [marketId, agentId, isYes],
-    value: BET_AMOUNT,
+    value: amount,
     gas: 800000n,
   });
 
   const receipt = await publicClient.waitForTransactionReceipt({ hash: tx });
   console.log(`✅ Bet placed`);
   console.log(`   Tx: ${formatExplorerTx(receipt.transactionHash)}`);
+}
+
+async function randomTradeRound(marketId: bigint, round: number) {
+  console.log(`\n🎲 Trading round ${round}`);
+  const agents = [AGENT_A, AGENT_B];
+  for (const agentId of agents) {
+    const isYes = randomBool();
+    const amount = randomBetAmount();
+    await placeBet(marketId, agentId, isYes, amount);
+  }
 }
 
 async function waitForResolution(marketId: bigint) {
@@ -191,13 +222,14 @@ async function waitForResolution(marketId: bigint) {
   }
 }
 
-async function resolveMarket(marketId: bigint) {
-  console.log(`\n🏁 Resolving market as YES...`);
+async function resolveMarket(marketId: bigint, outcome: number) {
+  const outcomeLabel = outcome === OUTCOME_YES ? "YES" : "NO";
+  console.log(`\n🏁 Resolving market as ${outcomeLabel}...`);
   const tx = await walletClient.writeContract({
     address: AGENT_MARKET_ADDRESS,
     abi: AGENT_MARKET_ABI,
     functionName: "resolveMarket",
-    args: [marketId, OUTCOME_YES],
+    args: [marketId, outcome],
     gas: 300000n,
   });
   const receipt = await publicClient.waitForTransactionReceipt({ hash: tx });
@@ -235,7 +267,7 @@ async function updateScores(marketId: bigint) {
 
 async function printSummary() {
   console.log(`\n🏆 Final Agent Scores`);
-  for (const agentId of [AGENT_YES, AGENT_NO, 1779n]) {
+  for (const agentId of [AGENT_A, AGENT_B, 1779n]) {
     await sleep(300);
     const score = await readWithRetry(() =>
       publicClient.readContract({
@@ -269,10 +301,14 @@ async function main() {
   await checkBalance();
 
   const marketId = await createMarket();
-  await placeBet(marketId, AGENT_YES, true, "YES");
-  await placeBet(marketId, AGENT_NO, false, "NO");
+
+  for (let round = 1; round <= TRADE_ROUNDS; round++) {
+    await randomTradeRound(marketId, round);
+  }
+
   await waitForResolution(marketId);
-  await resolveMarket(marketId);
+  const outcome = randomOutcome();
+  await resolveMarket(marketId, outcome);
   await claimWinnings(marketId);
   await updateScores(marketId);
   await printSummary();
