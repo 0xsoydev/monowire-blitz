@@ -2,18 +2,26 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { formatEther } from "viem";
+import { createWalletClient, custom } from "viem";
 import Link from "next/link";
+import { wrapFetchWithPayment } from "@x402/fetch";
+import { x402Client } from "@x402/core/client";
+import { ExactEvmScheme } from "@x402/evm";
 import {
   publicClient,
   AGENT_MARKET_ADDRESS,
   AGENT_MARKET_ABI,
   IDENTITY_REGISTRY,
   IDENTITY_REGISTRY_ABI,
+  monadTestnet,
 } from "@/lib/contracts";
 
 const AGENT_IDS = [1777, 1778, 1779];
 const POLL_INTERVAL_MS = 20_000;
 const RPC_RETRY_DELAY_MS = 800;
+
+const MONAD_USDC_TESTNET = "0x534b2f3A21130d7a60830c2Df862319e593943A3";
+const FACILITATOR_URL = "https://x402-facilitator.molandak.org";
 
 interface Agent {
   id: number;
@@ -52,6 +60,7 @@ const neoButtonOutline = "border-4 border-black bg-transparent hover:bg-zinc-800
 const neoBadge = (color: string) => `border-4 border-black px-3 py-1 font-black text-xs shadow-[3px_3px_0px_0px_#000] uppercase ${color}`;
 
 const agentAccent = ["bg-pink-400", "bg-cyan-400", "bg-lime-400"];
+const statsAccent = ["bg-yellow-400", "bg-pink-400", "bg-cyan-400", "bg-lime-400"];
 
 function generateHistory(score: bigint): number[] {
   const points = 14;
@@ -97,11 +106,7 @@ function LineChart({ data, color }: { data: number[]; color: string }) {
           <stop offset="100%" stopColor={color} stopOpacity="0.05" />
         </linearGradient>
       </defs>
-      <polygon
-        points={areaPoints}
-        fill={`url(#grad-${color})`}
-        stroke="none"
-      />
+      <polygon points={areaPoints} fill={`url(#grad-${color})`} stroke="none" />
       <polyline
         fill="none"
         stroke={color}
@@ -113,20 +118,14 @@ function LineChart({ data, color }: { data: number[]; color: string }) {
       {data.map((val, i) => {
         const x = i * stepX;
         const y = height - ((val - min) / range) * (height - 16) - 8;
-        return (
-          <circle
-            key={i}
-            cx={x}
-            cy={y}
-            r="4"
-            fill="#000"
-            stroke={color}
-            strokeWidth="2"
-          />
-        );
+        return <circle key={i} cx={x} cy={y} r="4" fill="#000" stroke={color} strokeWidth="2" />;
       })}
     </svg>
   );
+}
+
+function truncate(addr: string) {
+  return addr.length > 10 ? `${addr.slice(0, 6)}…${addr.slice(-4)}` : addr;
 }
 
 export default function RentPage() {
@@ -135,7 +134,9 @@ export default function RentPage() {
   const [error, setError] = useState<string | null>(null);
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
   const [paying, setPaying] = useState(false);
-  const [paid, setPaid] = useState(false);
+  const [payError, setPayError] = useState<string | null>(null);
+  const [rented, setRented] = useState(false);
+  const [walletAddress, setWalletAddress] = useState<string | null>(null);
   const [blockNumber, setBlockNumber] = useState<bigint | null>(null);
 
   const load = useCallback(async () => {
@@ -163,7 +164,7 @@ export default function RentPage() {
             .catch(() => "0x")
         );
         const winRate = winRateFromScore(score);
-        const price = (0.005 + Math.abs(Number(score)) * 0.00025).toFixed(4);
+        const price = (0.001 + Math.abs(Number(score)) * 0.00005).toFixed(3);
         agentData.push({ id, owner, score, winRate, price, history: generateHistory(score) });
       }
       setAgents(agentData);
@@ -184,17 +185,94 @@ export default function RentPage() {
     return () => clearInterval(interval);
   }, [load]);
 
+  const connectWallet = async () => {
+    try {
+      if (typeof window === "undefined" || !(window as any).ethereum) {
+        throw new Error("No wallet found. Install MetaMask or another EVM wallet.");
+      }
+      const walletClient = createWalletClient({
+        chain: monadTestnet,
+        transport: custom((window as any).ethereum),
+      });
+      const [address] = await walletClient.requestAddresses();
+      setWalletAddress(address);
+    } catch (err) {
+      setPayError(err instanceof Error ? err.message : "Failed to connect wallet");
+    }
+  };
+
   const handleRent = async (agent: Agent) => {
     setSelectedAgent(agent);
     setPaying(true);
-    setPaid(false);
-    // Simulate x402 payment handshake
-    await sleep(1200);
-    setPaying(false);
-    setPaid(true);
+    setPayError(null);
+    setRented(false);
+
+    try {
+      if (!walletAddress) {
+        throw new Error("Connect your wallet first");
+      }
+      if (typeof window === "undefined" || !(window as any).ethereum) {
+        throw new Error("No wallet found");
+      }
+
+      const walletClient = createWalletClient({
+        chain: monadTestnet,
+        transport: custom((window as any).ethereum),
+      });
+
+      const evmSigner = {
+        address: walletAddress as `0x${string}`,
+        signTypedData: async (message: {
+          domain: Record<string, unknown>;
+          types: Record<string, unknown>;
+          primaryType: string;
+          message: Record<string, unknown>;
+        }) => {
+          return walletClient.signTypedData({
+            account: walletAddress as `0x${string}`,
+            domain: message.domain as any,
+            types: message.types as any,
+            primaryType: message.primaryType,
+            message: message.message as any,
+          });
+        },
+      };
+
+      const exactScheme = new ExactEvmScheme(evmSigner);
+      const client = new x402Client().register("eip155:10143", exactScheme);
+      const paymentFetch = wrapFetchWithPayment(fetch, client);
+
+      const response = await paymentFetch(`/api/rent?agentId=${agent.id}`, {
+        method: "GET",
+        headers: { "Content-Type": "application/json" },
+      });
+
+      if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        throw new Error(text || `Payment failed: ${response.status}`);
+      }
+
+      const data = await response.json();
+      if (data.rented) {
+        setRented(true);
+      } else {
+        throw new Error("Rental not confirmed");
+      }
+    } catch (err) {
+      setPayError(err instanceof Error ? err.message : "Payment failed");
+    } finally {
+      setPaying(false);
+    }
   };
 
   const sortedAgents = [...agents].sort((a, b) => b.winRate - a.winRate);
+
+  const stats = [
+    { label: "Agents", value: agents.length.toString(), accent: statsAccent[0] },
+    { label: "Avg Win Rate", value: agents.length ? `${Math.round(agents.reduce((a, b) => a + b.winRate, 0) / agents.length)}%` : "—", accent: statsAccent[1] },
+    { label: "Best Agent", value: sortedAgents[0] ? `#${sortedAgents[0].id}` : "—", accent: statsAccent[2] },
+    { label: "Block", value: blockNumber !== null ? blockNumber.toString() : "—", accent: statsAccent[3] },
+  ];
 
   return (
     <div className="min-h-screen bg-[#0a0a0a] text-zinc-50">
@@ -211,17 +289,25 @@ export default function RentPage() {
             </div>
           </Link>
 
-          <div className="flex items-center gap-3">
-            <div className="hidden sm:flex items-center gap-2 border-4 border-black bg-lime-400 px-3 py-1.5 shadow-[3px_3px_0px_0px_#fff]">
-              <span className="w-2 h-2 bg-black rounded-full animate-pulse" />
-              <span className="text-xs font-black text-black">
-                {blockNumber !== null ? `BLOCK ${blockNumber.toString()}` : "LOADING"}
-              </span>
+          <div className="flex-1 max-w-md hidden md:block">
+            <div className="border-4 border-black bg-[#1a1a1a] px-4 py-2 shadow-[3px_3px_0px_0px_#000]">
+              <p className="text-xs font-black text-zinc-500 uppercase tracking-wider">
+                x402 · Monad Testnet · USDC
+              </p>
             </div>
-            <Link
-              href="/"
-              className={`${neoButtonOutline} px-4 py-2 text-sm uppercase`}
-            >
+          </div>
+
+          <div className="flex items-center gap-3">
+            {walletAddress ? (
+              <div className="border-4 border-black bg-lime-400 px-3 py-1.5 shadow-[3px_3px_0px_0px_#fff]">
+                <span className="text-xs font-black text-black">{truncate(walletAddress)}</span>
+              </div>
+            ) : (
+              <button onClick={connectWallet} className={`${neoButton} px-4 py-2 text-sm uppercase`}>
+                CONNECT WALLET
+              </button>
+            )}
+            <Link href="/" className={`${neoButtonOutline} px-4 py-2 text-sm uppercase`}>
               BACK TO MARKETS
             </Link>
           </div>
@@ -238,7 +324,7 @@ export default function RentPage() {
             Rent a winning agent.
           </h2>
           <p className="text-zinc-400 text-base sm:text-lg font-medium leading-relaxed">
-            Lease an ERC-8004 prediction agent. Pay via x402. Pocket the upside when it wins.
+            Lease an ERC-8004 prediction agent. Pay USDC via x402. Keep the upside when it wins.
           </p>
         </section>
 
@@ -254,6 +340,16 @@ export default function RentPage() {
             </button>
           </div>
         )}
+
+        {/* Stats */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          {stats.map((stat) => (
+            <div key={stat.label} className={`${neoCard} p-4 ${stat.accent} hover:translate-x-1 hover:translate-y-1 hover:shadow-[4px_4px_0px_0px_#000] transition-all`}>
+              <p className="text-xs font-black text-black uppercase tracking-wider mb-2">{stat.label}</p>
+              <p className="text-2xl sm:text-3xl font-black text-black truncate">{stat.value}</p>
+            </div>
+          ))}
+        </div>
 
         {/* Loading */}
         {loading && agents.length === 0 && !error && (
@@ -310,11 +406,12 @@ export default function RentPage() {
                 <div className="flex items-center justify-between border-t-4 border-zinc-800 pt-4 mt-auto">
                   <div>
                     <p className="text-[10px] font-black text-zinc-500 uppercase tracking-wider">Rent Price</p>
-                    <p className="text-xl font-black text-white">{agent.price} MON</p>
+                    <p className="text-xl font-black text-white">{agent.price} USDC</p>
                   </div>
                   <button
                     onClick={() => handleRent(agent)}
-                    className={`${neoButton} px-5 py-2.5 text-sm uppercase`}
+                    disabled={paying}
+                    className={`${neoButton} px-5 py-2.5 text-sm uppercase ${paying ? "opacity-75 cursor-wait" : ""}`}
                   >
                     RENT
                   </button>
@@ -325,7 +422,7 @@ export default function RentPage() {
         </div>
       </main>
 
-      {/* x402 Payment Modal */}
+      {/* Payment Modal */}
       {selectedAgent && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80">
           <div className={`${neoCard} w-full max-w-md p-6 relative`}>
@@ -335,40 +432,60 @@ export default function RentPage() {
             >
               ×
             </button>
-            <h3 className="text-2xl font-black text-white uppercase mb-4">Rent Agent #{selectedAgent.id}</h3>
 
-            <div className="space-y-4 mb-6">
-              <div className="border-4 border-black bg-[#1a1a1a] p-3">
-                <p className="text-[10px] font-black text-zinc-500 uppercase tracking-wider">x402 Payment Request</p>
-                <p className="text-sm font-bold text-zinc-300">
-                  Agent {selectedAgent.id} requests {selectedAgent.price} MON to execute predictions for 1 hour.
-                </p>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="border-4 border-black bg-[#1a1a1a] p-3">
-                  <p className="text-[10px] font-black text-zinc-500 uppercase tracking-wider">Amount</p>
-                  <p className="font-black text-white text-lg">{selectedAgent.price} MON</p>
+            {rented ? (
+              <div className="text-center space-y-4">
+                <div className="border-4 border-black bg-emerald-400 p-4">
+                  <p className="font-black text-black text-lg uppercase">AGENT RENTED</p>
+                  <p className="text-sm font-black text-black mt-1">Agent #{selectedAgent.id} is unlocked for 1 hour.</p>
                 </div>
-                <div className="border-4 border-black bg-[#1a1a1a] p-3">
-                  <p className="text-[10px] font-black text-zinc-500 uppercase tracking-wider">Win Rate</p>
-                  <p className="font-black text-emerald-400 text-lg">{selectedAgent.winRate}%</p>
-                </div>
-              </div>
-            </div>
-
-            {paid ? (
-              <div className="border-4 border-black bg-emerald-400 p-4 text-center">
-                <p className="font-black text-black text-lg uppercase">PAID & RENTED</p>
-                <p className="text-sm font-black text-black mt-1">Agent #{selectedAgent.id} is now yours.</p>
+                <button onClick={() => setSelectedAgent(null)} className={`${neoButton} w-full py-3 text-lg uppercase`}>
+                  CLOSE
+                </button>
               </div>
             ) : (
-              <button
-                onClick={() => handleRent(selectedAgent)}
-                disabled={paying}
-                className={`${neoButton} w-full py-3 text-lg uppercase ${paying ? "opacity-75 cursor-wait" : ""}`}
-              >
-                {paying ? "PROCESSING X402…" : "PAY WITH X402"}
-              </button>
+              <>
+                <h3 className="text-2xl font-black text-white uppercase mb-4">Rent Agent #{selectedAgent.id}</h3>
+
+                <div className="space-y-4 mb-6">
+                  <div className="border-4 border-black bg-[#1a1a1a] p-3">
+                    <p className="text-[10px] font-black text-zinc-500 uppercase tracking-wider">x402 Payment Request</p>
+                    <p className="text-sm font-bold text-zinc-300">
+                      Pay {selectedAgent.price} USDC on Monad Testnet to rent Agent {selectedAgent.id} for 1 hour.
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="border-4 border-black bg-[#1a1a1a] p-3">
+                      <p className="text-[10px] font-black text-zinc-500 uppercase tracking-wider">Amount</p>
+                      <p className="font-black text-white text-lg">{selectedAgent.price} USDC</p>
+                    </div>
+                    <div className="border-4 border-black bg-[#1a1a1a] p-3">
+                      <p className="text-[10px] font-black text-zinc-500 uppercase tracking-wider">Win Rate</p>
+                      <p className="font-black text-emerald-400 text-lg">{selectedAgent.winRate}%</p>
+                    </div>
+                  </div>
+                </div>
+
+                {!walletAddress && (
+                  <div className="border-4 border-black bg-amber-400 p-3 mb-4">
+                    <p className="text-sm font-black text-black">Connect your wallet first to sign the x402 payment.</p>
+                  </div>
+                )}
+
+                {payError && (
+                  <div className="border-4 border-black bg-rose-950 p-3 mb-4">
+                    <p className="text-sm font-black text-rose-200">{payError}</p>
+                  </div>
+                )}
+
+                <button
+                  onClick={() => handleRent(selectedAgent)}
+                  disabled={paying || !walletAddress}
+                  className={`${neoButton} w-full py-3 text-lg uppercase ${paying || !walletAddress ? "opacity-75 cursor-not-allowed" : ""}`}
+                >
+                  {paying ? "PROCESSING X402…" : "PAY WITH X402"}
+                </button>
+              </>
             )}
           </div>
         </div>
