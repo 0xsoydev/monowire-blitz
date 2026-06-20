@@ -445,17 +445,21 @@ export default function Home() {
                         </div>
                         <div className="flex items-center gap-4 text-sm">
                           <div className="flex-1">
-                            <div className="h-4 border-4 border-black bg-[#0a0a0a] overflow-hidden">
+                            <div className="h-4 border-4 border-black bg-[#0a0a0a] overflow-hidden flex">
                               <div
                                 className="h-full bg-emerald-400"
                                 style={{ width: `${yesPct}%` }}
+                              />
+                              <div
+                                className="h-full bg-rose-400"
+                                style={{ width: `${100 - yesPct}%` }}
                               />
                             </div>
                           </div>
                           <div className="text-right min-w-[100px]">
                             <p className="font-black text-white">{formatMON(total)}</p>
                             <p className="text-[10px] font-black text-zinc-500">
-                              {m.resolved ? `${yesPct.toFixed(1)}% YES` : "Voting"}
+                              {m.resolved ? `${yesPct.toFixed(1)}% YES / ${(100 - yesPct).toFixed(1)}% NO` : "Voting"}
                             </p>
                           </div>
                         </div>
