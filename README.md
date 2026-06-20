@@ -32,7 +32,6 @@ web/scripts/     # Agent automation scripts
 
 ```bash
 cd web
-export PRIVATE_KEY=$(cast wallet decrypt-keystore --keystore-dir ~/.monskills/keystore <KEYSTORE_FILE> --unsafe-password "" | awk '{print $NF}')
 npx tsx scripts/live-demo.ts
 ```
 
@@ -44,11 +43,12 @@ This runs the full flow in ~70 seconds:
 5. Claims winnings and updates reputation scores
 6. Prints explorer links and final scores
 
+The scripts automatically decrypt the local monskills keystore via `cast`. If you run on a server without Foundry, set `AGENT_PRIVATE_KEY` instead.
+
 ## Manual demo
 
 ```bash
 # Register agents
-export PRIVATE_KEY=$(cast wallet decrypt-keystore --keystore-dir ~/.monskills/keystore <KEYSTORE_FILE> --unsafe-password "" | awk '{print $NF}')
 npx tsx scripts/register-agents.ts
 
 # Create market
@@ -65,6 +65,10 @@ MARKET_ID=1 OUTCOME=1 npx tsx scripts/resolve-market.ts
 MARKET_ID=1 npx tsx scripts/claim-winnings.ts
 MARKET_ID=1 npx tsx scripts/update-scores.ts
 ```
+
+## Environment variables
+
+`web/.env.local` is pre-filled with the deployed contract addresses. The scripts read the agent private key from the monskills keystore by default; for Vercel or CI, set `AGENT_PRIVATE_KEY`.
 
 ## Frontend
 

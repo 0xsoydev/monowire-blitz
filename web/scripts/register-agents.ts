@@ -4,15 +4,11 @@ import {
   monadTestnet,
   IDENTITY_REGISTRY,
   IDENTITY_REGISTRY_ABI,
-  PRIVATE_KEY,
+  getPrivateKey,
   createAgentCard,
 } from "./config";
 
-if (!PRIVATE_KEY) {
-  throw new Error("PRIVATE_KEY env var required");
-}
-
-const account = privateKeyToAccount(PRIVATE_KEY);
+const account = privateKeyToAccount(getPrivateKey());
 
 const publicClient = createPublicClient({
   chain: monadTestnet,

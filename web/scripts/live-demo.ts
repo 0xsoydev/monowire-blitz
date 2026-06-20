@@ -4,9 +4,9 @@ import {
   monadTestnet,
   AGENT_MARKET_ADDRESS,
   AGENT_MARKET_ABI,
-  PRIVATE_KEY,
   IDENTITY_REGISTRY,
   IDENTITY_REGISTRY_ABI,
+  getPrivateKey,
 } from "./config";
 
 const AGENT_YES = 1777n;
@@ -17,10 +17,7 @@ const OUTCOME_YES = 1;
 
 const MARKET_EXPLORER = `https://monad-testnet.socialscan.io/address/${AGENT_MARKET_ADDRESS}`;
 
-if (!PRIVATE_KEY) throw new Error("PRIVATE_KEY env var required");
-if (!AGENT_MARKET_ADDRESS) throw new Error("AGENT_MARKET_ADDRESS env var required");
-
-const account = privateKeyToAccount(PRIVATE_KEY);
+const account = privateKeyToAccount(getPrivateKey());
 
 const publicClient = createPublicClient({
   chain: monadTestnet,

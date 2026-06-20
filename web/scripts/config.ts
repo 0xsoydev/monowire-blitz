@@ -1,6 +1,26 @@
 import dotenv from "dotenv";
 dotenv.config({ path: ".env.local" });
 import { defineChain } from "viem";
+import { execSync } from "child_process";
+
+const KEYSTORE_FILE = "e803ff23-8173-4f8d-a5b9-dde7ee76159f";
+
+export function getPrivateKey(): `0x${string}` {
+  if (process.env.AGENT_PRIVATE_KEY) {
+    return process.env.AGENT_PRIVATE_KEY as `0x${string}`;
+  }
+  try {
+    const result = execSync(
+      `cast wallet decrypt-keystore --keystore-dir ~/.monskills/keystore ${KEYSTORE_FILE} --unsafe-password "" | awk '{print $NF}'`,
+      { encoding: "utf-8" }
+    );
+    return result.trim() as `0x${string}`;
+  } catch (err) {
+    throw new Error(
+      "AGENT_PRIVATE_KEY env var is required, or Foundry must be installed to decrypt the monskills keystore."
+    );
+  }
+}
 
 export const monadTestnet = defineChain({
   id: 10143,
@@ -222,7 +242,6 @@ export const AGENT_MARKET_ABI = [
 ] as const;
 
 export const AGENT_MARKET_ADDRESS = (process.env.AGENT_MARKET_ADDRESS || "") as `0x${string}`;
-export const PRIVATE_KEY = (process.env.PRIVATE_KEY || "") as `0x${string}`;
 
 export function createAgentCard(name: string, agentId: number, image: string) {
   const card = {

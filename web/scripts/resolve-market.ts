@@ -4,13 +4,12 @@ import {
   monadTestnet,
   AGENT_MARKET_ADDRESS,
   AGENT_MARKET_ABI,
-  PRIVATE_KEY,
+  getPrivateKey,
 } from "./config";
 
-if (!PRIVATE_KEY) throw new Error("PRIVATE_KEY env var required");
 if (!AGENT_MARKET_ADDRESS) throw new Error("AGENT_MARKET_ADDRESS env var required");
 
-const account = privateKeyToAccount(PRIVATE_KEY);
+const account = privateKeyToAccount(getPrivateKey());
 
 const publicClient = createPublicClient({
   chain: monadTestnet,

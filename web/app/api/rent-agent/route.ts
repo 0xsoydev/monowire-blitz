@@ -10,12 +10,19 @@ const MONAD_USDC_TESTNET = "0x534b2f3A21130d7a60830c2Df862319e593943A3";
 const KEYSTORE_FILE = "e803ff23-8173-4f8d-a5b9-dde7ee76159f";
 
 function getPrivateKey(): `0x${string}` {
-  const { execSync } = require("child_process");
-  const result = execSync(
-    `cast wallet decrypt-keystore --keystore-dir ~/.monskills/keystore ${KEYSTORE_FILE} --unsafe-password "" | awk '{print $NF}'`,
-    { encoding: "utf-8" }
-  );
-  return result.trim() as `0x${string}`;
+  if (process.env.AGENT_PRIVATE_KEY) {
+    return process.env.AGENT_PRIVATE_KEY as `0x${string}`;
+  }
+  try {
+    const { execSync } = require("child_process");
+    const result = execSync(
+      `cast wallet decrypt-keystore --keystore-dir ~/.monskills/keystore ${KEYSTORE_FILE} --unsafe-password "" | awk '{print $NF}'`,
+      { encoding: "utf-8" }
+    );
+    return result.trim() as `0x${string}`;
+  } catch (err) {
+    throw new Error("AGENT_PRIVATE_KEY env var is required on Vercel, or Foundry must be installed locally to decrypt the keystore");
+  }
 }
 
 function createAgentWalletClient(): WalletClient {
